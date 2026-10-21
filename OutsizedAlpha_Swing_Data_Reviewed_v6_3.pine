@@ -1,0 +1,2128 @@
+// This Source Code Form is subject to the terms of the Mozilla Public
+// License, v. 2.0. If a copy of the MPL was not distributed with this
+// file, You can obtain one at https://mozilla.org/MPL/2.0/.
+// Original Swing Data open-source foundation: jfsrev (TradingView).
+// Projected Volume source acknowledged: Bob-Lablaw (TradingView).
+// Subsequent extensions, integration and maintenance: OutsizedAlpha.
+// Individual contributors retain rights to their respective contributions.
+// See ATTRIBUTION.md and LICENSE in the repository for provenance and terms.
+//@version=6
+indicator(title='OutsizedAlpha Swing Data — Audited', shorttitle='OA Swing Data', overlay=true, max_bars_back=3500, dynamic_requests=true)
+// Build: OUTSIZEDALPHA-SWING-DATA-v3.3 — table-control and help-text repair.
+// Custom is the default; individual row inputs are enabled only in Custom.
+// All v3.2 calculation-engine, scope and indentation fixes are retained unchanged.
+// Based on jfsrev's original Swing Data indicator and further OutsizedAlpha
+// modifications. Projected Volume credits Bob-Lablaw in the source history.
+// Public reuse must preserve applicable upstream attribution and licensing.
+//
+// DAILY (<1D charts mirror the requested 1D series):
+// - completed-return-only historical VaR/ES, adjustable empirical 1% and 5% tails;
+// - correct float% share-count denominator with explicit mismatch status;
+// - independent same-time seasonal share and notional projections, no linear clock;
+// - separate FY-float estimate versus consistent volume proxy; sample counts;
+// - seven-ordered-level RS calibration guard, otherwise N/A.
+//
+// 2D+, W, M: period-native risk, participation and projections remain separate.
+// No current-period return enters the risk reference. Requested lookbacks are
+// targets, with 3,000-history-scan and TradingView source-bar resource limits.
+// Intraday histories are validated against source cumulative data where possible.
+// Current VWAP remains EXACTLY a percent price/VWAP deviation, never ADR/ATR.
+// A given daily 21/63-floor still applies to its respective metrics; 126 prior
+// completed daily returns minimum for VaR. FY shares aren't PIT ownership data.
+// Native TradingView compilation/live feed behaviour still needs user testing.
+// Select Custom to control each metric with its tick box. Compact and Full Research
+// are fixed presets: their row tick boxes are deliberately disabled, not ignored silently.
+tablePreset = input.string('Custom', title='Table Preset', options=['Custom','Compact','Full Research'], group='Table', tooltip='Custom (default): every Display tick box directly controls its own row. Compact: fixed 15-row view. Full Research: all 39 metric rows. The Display tick boxes are disabled in the two fixed presets; switch back to Custom to edit your selection. Previously saved Custom selections are not changed by using a preset.')
+bool customRowControls = tablePreset == 'Custom'
+show_empty_row    = input(true, title='Add an empty row above the displayed values', tooltip='Serves the purpose of not having the pane icons overlap with the ' +'text in the table if multiple panes are shown and the chart pane is hovered')
+show_mktCap = input.bool(true, title='Show Market Cap', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_float = input.bool(true, title='Show Shares Float', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_floatpercent = input.bool(true, title='Show Float%', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_float_turnover = input.bool(true, title='Show Float Turnover', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_participation_pctile = input.bool(true, title='Show Participation Intensity Percentile', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_adrp = input.bool(true, title='Show ADR%', group='Display', active=customRowControls, tooltip='Average percentage high-low range using ADR% Length and the selected ADR% denominator. Low (legacy) uses each candle low; Previous close (comparable) uses its previous close. Daily on charts below 1D, otherwise chart-period range.')
+show_adr_comparable = input.bool(false, title='Show comparable range% / previous close', group='Display', active=customRowControls, tooltip='Average of 100*(high-low)/previous close across ADR% Length candles. This is an alternative normalisation of the high-low range, not a price-return signal. If ADR% denominator is already Previous close (comparable), this row duplicates ADR%.')
+show_adr_pace = input.bool(true, title='Show ADR Pace @Time', group='Display', active=customRowControls, tooltip='Signed open-to-current percentage move divided by ADR% times the historical fraction of range normally developed by this session point. At the close that fraction is 1. A reading near zero can occur despite a large high-low range if price returns to its open.')
+show_atrPer = input.bool(false, title='Show ATR%', group='Display', active=customRowControls, tooltip='Wilder average true range divided by current price, multiplied by 100. True range includes gaps from the preceding close. This can use a different lookback and averaging method from ADR%; it is not their difference or a confidence bound.')
+show_var = input.bool(true, title="Show VaR (Value at Risk)", group='Display', active=customRowControls, tooltip='Historical lower-tail return quantile at Selected VaR lower-tail percentile, using completed returns before the current period. Default tail is 1%. A reading of -5% is an estimated historical return cutoff, NOT the maximum possible loss or a guarantee about the next session. No Sharpe ratio is calculated.')
+show_var_plus_3sigma = input.bool(false, title='Show legacy stress heuristic (VaR - 3σ)', group='Display', active=customRowControls, tooltip='Optional bespoke stress heuristic: selected historical VaR minus three population standard deviations of the same return sample. This has no separate calibrated confidence level and is not Expected Shortfall.')
+show_var5 = input.bool(true, title='Show 5% Historical VaR', group='Display', active=customRowControls, tooltip='Separate 5th-percentile signed return cutoff using prior completed returns. Example: -3% describes the approximate boundary of the worst 5% of that historical sample, not a 5% loss amount. It duplicates the selected VaR row when Selected VaR lower-tail percentile is 5.')
+show_es5 = input.bool(true, title='Show 5% Expected Shortfall', group='Display', active=customRowControls, tooltip='Historical average of the worst ceil(0.05*n) prior completed returns. At n=252, average the worst 13 returns. This estimates observed tail severity, rather than the cutoff shown by 5% VaR. The rounded tail count and small sample introduce uncertainty. Daily minimum is 126 prior completed returns.')
+show_atr = input.bool(false, title='Show ATR', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_ipo_date = input.bool(false, title='Show IPO Timer', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_lod_dist = input.bool(true, title='Show LoD dist.', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_lod_price = input.bool(true, title='Show LoD Price', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_dist_high = input.bool(true, title='Show %dist of 52 We High', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_dist_low = input.bool(true, title='Show %dist of 52 We Low', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_ADVS = input.bool(true, title='Show Avg $ Volume', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_ADV = input.bool(true, title='Show Avg Volume', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_projectedVol = input.bool(true, title='Show Projected Volumes', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_proj_dollar_vol = input.bool(true, title='Show Projected $ Volume', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_relVol = input.bool(true, title='Show Relative Volume', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_rvat = input.bool(true, title='Show Rel. Vol at Time', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_economic_throughput = input.bool(true, title='Show Economic Throughput', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_day_range_position = input.bool(true, title='Show Day Range Position', group='Display', active=customRowControls, tooltip='Current price position within the regular-session period high-low range: 0% at the low, 50% at the midpoint, 100% at the high. Unlike Directional Efficiency, this does not measure the move from the open.')
+show_vwap_distance = input.bool(true, title='Show Distance from VWAP', group='Display', active=customRowControls, tooltip='Percentage distance from the native regular-session VWAP: 100*(price/VWAP-1). Positive is above VWAP; negative is below. Remains a percentage only, with no ADR/ATR normalisation. The snapshot does not measure how long price has held above VWAP.')
+show_price_impact = input.bool(true, title='Show Directional Price Response / Float Turnover', group='Display', active=customRowControls, tooltip='Price return in percentage points divided by gross float turnover in percent. Example: +2% price return / 0.5% float turnover = +4.00 pp per 1% turnover. Return basis is selected in Participation / Acceptance. It is a descriptive ratio, not proof that turnover caused the move; very small turnover can produce extreme readings.')
+show_directional_efficiency = input.bool(true, title='Show Signed Directional Efficiency', group='Display', active=customRowControls, tooltip='Signed candle body as a percentage of its high-low range: 100*(close-open)/(high-low). +60% means the net rise from open equals 60% of the total range, NOT a 60% share-price gain. Negative means down from open; zero means unchanged from open. This does not measure how smooth the intraday path was. Daily on charts below 1D; current chart period above 1D.')
+show_days_liquidate = input.bool(false, title='Show Estimated Days to Liquidate', group='Display', active=customRowControls, tooltip='Estimated full-session-equivalent trading days to sell your entered share position: position shares / (prior completed daily average volume * maximum ADV participation / 100). First enter Optional portfolio position (shares) and Maximum share of daily ADV (%) under Parameters. Zero shares shows Enter position shares. This is not a forecast or an execution guarantee.')
+show_data_quality = input.bool(false, title='Show Source / Sample Quality Summary', group='Display', active=customRowControls, tooltip='Data audit, not a trading signal: checks float/share-count consistency and shows actual versus requested observations for risk, same-time relative volume and participation. [FY est.] means annual reported-float approximation; [V-proxy] means a separate volume-based percentile. Counts measure coverage, not statistical reliability. Hover over the table row for diagnostics.')
+show_volBuzz = input.bool(true, title='Show Vol. Buzz', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_dolVolBuzz = input.bool(true, title='Show $ Vol. Buzz', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_UDratio = input.bool(true, title='Show U/D Ratio', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_rs_rating = input.bool(true, title='Show RS Rating', group='Display', active=customRowControls, tooltip='Externally calibrated relative-strength percentile estimate on daily and intraday charts; not an official IBD rating. Requires seven valid reference levels. Higher-timeframe charts show an unranked weighted relative-performance ratio versus SPX: 100 means equal weighted relative performance, not a 100th percentile.')
+show_liqCap = input.bool(true, title='Show Liquidity Cap', group='Display', active=customRowControls, tooltip='Reference number of shares equal to 1% of prior completed daily average volume. Not a liquidity guarantee or an exchange limit. Separate from the user-selected ADV participation used for Days to Liquidate.')
+show_sector = input.bool(true, title='Show Sector', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+show_ind = input.bool(true, title='Show Ind. Grp', group='Display', active=customRowControls, tooltip='Show this metric in the table. Select Custom in Table Preset to edit individual rows. A dash or N/A indicates missing or ineligible data; the selected row remains visible.')
+adrp_len          = input.int(20, title='ADR% Length', minval=1, maxval=1260, group='Parameters', tooltip='Average of percentage high-low ranges, over this many chart-period candles.')
+adrp_basis = input.string('Low (legacy)', title='ADR% denominator', options=['Low (legacy)','Previous close (comparable)'], group='Parameters', tooltip='Legacy: mean of 100*(high/low - 1). Comparable: mean of 100*(high-low)/previous close. ATR% remains Wilder ATR/current close.')
+atr_len           = input.int(14, title='ATR Length', minval=1, maxval=1260, group='Parameters', tooltip='The number of bars used in the calculation of the ATR')
+var_len = input.int(252, title='VaR/ES Max Lookback (completed chart bars)', minval=126, maxval=1260, group='Parameters', tooltip='Maximum prior COMPLETED chart-period returns. Daily minimum=126; higher-period floors are configurable. 1% VaR is especially noisy with only 252 returns. Current developing period is ALWAYS excluded.')
+min_projection_minutes = input.int(15, title='Earliest time to publish daily volume projection (minutes)', minval=1, maxval=120, group='Parameters', tooltip='Avoid wildly unstable projections from a few opening prints. Historical same-time seasonal fraction must also have at least 21 usable sessions.')
+position_shares = input.float(0.0, title='Optional portfolio position (shares)', minval=0.0, group='Parameters', tooltip='Enter your share holding to estimate liquidation days using completed daily average volume. Zero disables the estimate. No private portfolio data is requested or transmitted.')
+max_adv_participation_pct = input.float(5.0, title='Maximum share of daily ADV (%)', minval=0.1, maxval=50.0, step=0.5, group='Parameters', tooltip='Simplified liquidation estimate = position shares / (daily ADV × participation%). Not a market-impact model or execution guarantee.')
+percentile = input.float(1.0, title='Selected VaR lower-tail percentile (1 or 5 recommended)', minval=0.1, maxval=10.0, step=0.5, group='Parameters')
+in_percent        = input(true, title="Result in Percentage", group = 'Parameters') // Added percentage toggle
+len               = input.int(50, 'Volume MA Length', minval=1, maxval=1260, group='Parameters', tooltip='The number of bars back for the MA calculation of the volume')
+dollar_vol_len    = input.int(50, '$ Volume MA Length', minval=1, maxval=1260, group='Parameters', tooltip='The number of bars back for the MA calculation of the dollar volume') // Added Dollar Volume MA Length
+// Relative Volume at Time parameters (designed to run on the 1D chart)
+rvat_intratf      = input.string('5', title='RVOL@Time Sampling Resolution (min)', options=['1','3','5','15','30'], group = 'Rel. Vol at Time', tooltip='Historical same-time volume is reconstructed from lower-timeframe bars. The current-day numerator uses live daily volume, so it updates on every market-data update. Use 1 minute for the most precise partial-bar comparison; 5 minutes is the lighter default.')
+rvat_mode         = input.string('Cumulative from open', title='RVOL@Time Mode', options=['Cumulative from open','Per-block'], group = 'Rel. Vol at Time', tooltip='Cumulative from open compares today’s total volume so far with the average volume reached at the same elapsed time on prior sessions. Per-block compares only the current rolling block with the matching historical block.')
+rvat_block        = input.string('30 min', title='RVOL@Time Block Size (Per-block mode)', options=['15 min','30 min','1 hr','90 min','2 hr','3 hr','4 hr'], group = 'Rel. Vol at Time', tooltip='Used only in Per-block mode. Keep the sampling resolution at or below the selected block size.')
+rvat_len          = input.int(21, title='RVOL@Time Max Lookback (chart bars)', minval=6, maxval=1260, group = 'Rel. Vol at Time', tooltip='Maximum valid prior chart periods, not always days. Daily minimum remains 21. Higher-TF default minimum: 10 on day/week multiples, 6 on month multiples. Same-time matching above 1D uses the same session ordinal and session fraction. The selected sampling bar is time-weighted at a partial edge; inspect the tooltip for resolution and actual n.')
+rvat_output       = input.string('Difference (+/- %)', title='RVOL@Time Display', options=['Difference (+/- %)','Index (100 = average)','Ratio (x)'], group = 'Rel. Vol at Time', tooltip='Difference is the most literal reading: +50% means volume so far is 50% above the historical same-time average. Index shows 150%; Ratio shows 1.50x.')
+participation_len = input.int(252, title='Participation Intensity Percentile Max Lookback (chart bars)', minval=12, maxval=1260, group = 'Participation / Acceptance', tooltip='252 means up to 252 bars of the selected chart timeframe. Set 52 on 1W for up to 52 weekly observations. Daily floor stays 63; higher-TF defaults are 26 on day/week multiples and 12 on month multiples. Partial samples disclose n. Historical FY float remains approximate; the separately labelled volume proxy is retained.')
+participation_basis = input.string('Auto (historical float; volume fallback)', title='Participation Percentile Basis', options=['Auto (historical float; volume fallback)', 'Reported historical float only', 'Same-time volume only'], group = 'Participation / Acceptance', tooltip='Auto prefers reported-FY-float turnover when available. If float history is incomplete, it can use a larger valid same-time VOLUME sample once the applicable timeframe minimum is met (63 on 1D; Higher Timeframes settings above 1D). The fallback sample uses one consistent volume basis, never a mixture of actual and guessed float. The row is labelled [proxy].')
+adr_pace_len = input.int(63, title='Range Pace @Time Max Lookback (chart bars)', minval=6, maxval=252, group = 'Participation / Acceptance', tooltip='Daily uses ADR; weekly AWR; monthly AMR; other multiples their own average period range. At the period close, pace = period open-to-close return / average period range %. Higher-period history uses completed source intervals only for range progress. Daily floor stays 21; higher floors are disclosed in the tooltip.')
+price_impact_basis = input.string('Open to current', title='Price Impact Return Basis', options=['Open to current','Previous close to current'], group = 'Participation / Acceptance', tooltip='Open to current starts at the selected chart period open. Previous close means previous chart-period close. Float turnover uses volume accumulated in that same chart period.')
+posTable = input.string('Top Right', title='Table Position', options=['Top Left','Top Centre','Top Right','Middle Left','Middle Centre','Middle Right','Bottom Left','Bottom Centre','Bottom Right'], group='Table')
+tbl_size = input.string('Normal', title='Table Size', options=['Tiny','Small','Normal','Large','Extra Large'], group='Table')
+txt_align_left    = input.string('Center', title='Left Column Text Align', options=['Left', 'Center', 'Right'], group = 'Table')
+txt_align_right   = input.string('Center', title='Right Column Text Align', options=['Left', 'Center', 'Right'], group = 'Table')
+bg_col            = input(#00000000, title='Background Color', group = 'Table')
+txt_col           = input(color.black, title='Text Color', group = 'Table')  // Changed from orange to white
+// Higher-period controls do not change the 1D engine or its sampling settings.
+higher_history_tf = input.string('Auto', title='Higher-TF history sampling', options=['Auto','1','3','5','15','30','60','120','240','1D'], group='Higher Timeframes', tooltip='Used only above 1D. Auto balances the requested history against a 100,000-source-bar budget. It can choose coarser intraday or daily bars for long histories. Numerator remains live; partial historical source bars are approximated. The actual resolution is printed in each tooltip. Manual fine resolution can leave a shorter sample. Per-block Auto caps sampling at the block size.')
+higher_vwap_tf = input.string('Auto', title='Higher-TF VWAP sampling', options=['Auto','1','3','5','15','30','60'], group='Higher Timeframes', tooltip='Anchors to the CHART candle, not each day. Auto uses 1 minute for ordinary weekly/monthly charts and coarser intraday bars for very long periods to retain a complete anchor. Independent of history sampling. A clipped initial anchor remains unavailable. 1D retains its original 1-minute source and request.')
+higher_rank_min = input.int(0, title='Higher-TF percentile minimum (0 = Auto)', minval=0, maxval=252, group='Higher Timeframes', tooltip='Auto: 26 observations for multi-day/weekly bars, 12 for monthly multiples. A nonzero override is floored at 12. These are publication safeguards, not proof of statistical precision. Does not change the 1D floor of 63.')
+higher_average_min = input.int(0, title='Higher-TF average minimum (0 = Auto)', minval=0, maxval=252, group='Higher Timeframes', tooltip='Auto: 10 for multi-day/weekly bars, 6 for monthly multiples. Used for RVOL/range shapes and higher-period seasonal projections. Nonzero override is floored at 6. 1D remains 21.')
+higher_var_min = input.int(0, title='Higher-TF VaR minimum (0 = Auto)', minval=0, maxval=252, group='Higher Timeframes', tooltip='Auto: 52 completed multi-day/weekly returns or 36 completed monthly-multiple returns. Nonzero override is floored at 36. A 1% tail from a short sample is especially unstable; n is disclosed. Daily remains 126. Floors count observations, not elapsed days.')
+
+simple bool tfOneDay = timeframe.isdaily and timeframe.multiplier == 1
+simple bool tfPeriodSupported = timeframe.isdaily or timeframe.isweekly or timeframe.ismonthly
+simple bool tfHigher = tfPeriodSupported and not tfOneDay
+// Below 1D the table mirrors the 1D chart. timeframe.main_period stays the CHART timeframe
+// inside requests, so this flag means the same thing in the requested 1D contexts below.
+simple bool tfIntraday = timeframe.in_seconds(timeframe.main_period) < timeframe.in_seconds('1D')
+simple string periodTag = tfIntraday ? '1D' : timeframe.period
+simple string periodName = tfOneDay or tfIntraday ? 'Day' : timeframe.isweekly and timeframe.multiplier == 1 ? 'Week' : timeframe.ismonthly and timeframe.multiplier == 1 ? 'Month' : timeframe.period
+simple string rangeTag = tfOneDay or tfIntraday ? 'ADR' : timeframe.isweekly and timeframe.multiplier == 1 ? 'AWR' : timeframe.ismonthly and timeframe.multiplier == 1 ? 'AMR' : 'APR'
+simple int hRankFloor = higher_rank_min > 0 ? math.max(12, higher_rank_min) : timeframe.ismonthly ? 12 : 26
+simple int hAverageFloor = higher_average_min > 0 ? math.max(6, higher_average_min) : timeframe.ismonthly ? 6 : 10
+simple int hRiskFloor = higher_var_min > 0 ? math.max(36, higher_var_min) : timeframe.ismonthly ? 36 : 52
+simple int hScanLimit = math.min(3000, 2 * math.max(math.max(math.max(rvat_len, participation_len), adr_pace_len), math.max(len, dollar_vol_len)))
+// This estimate ONLY selects data resolution. It is NOT a volume projection or a
+// trading calendar; actual period/session bounds come from the requested symbol.
+simple float hEstimatedMinutes = syminfo.type == 'stock' or syminfo.type == 'fund' or syminfo.type == 'dr' ? (timeframe.ismonthly ? 23.0 * timeframe.multiplier * 600.0 : timeframe.isweekly ? 5.0 * timeframe.multiplier * 600.0 : float(timeframe.multiplier) * 600.0) : timeframe.in_seconds(timeframe.main_period) / 60.0
+simple float hTargetMinutes = hEstimatedMinutes * float(hScanLimit) / 85000.0
+simple string hAutomaticHistory = hTargetMinutes <= 1 ? '1' : hTargetMinutes <= 3 ? '3' : hTargetMinutes <= 5 ? '5' : hTargetMinutes <= 15 ? '15' : hTargetMinutes <= 30 ? '30' : hTargetMinutes <= 60 ? '60' : hTargetMinutes <= 120 ? '120' : hTargetMinutes <= 240 ? '240' : '1D'
+simple int hBlockInputMinutes = rvat_block == '15 min' ? 15 : rvat_block == '30 min' ? 30 : rvat_block == '1 hr' ? 60 : rvat_block == '90 min' ? 90 : rvat_block == '2 hr' ? 120 : rvat_block == '3 hr' ? 180 : 240
+simple string hAutoBlockCap = hBlockInputMinutes < 30 ? '15' : hBlockInputMinutes < 60 ? '30' : hBlockInputMinutes < 120 ? '60' : hBlockInputMinutes < 240 ? '120' : '240'
+simple string hHistoryChosen = higher_history_tf != 'Auto' ? higher_history_tf : rvat_mode == 'Per-block' and timeframe.in_seconds(hAutomaticHistory) > hBlockInputMinutes * 60 ? hAutoBlockCap : hAutomaticHistory
+simple string hHistoryTf = tfHigher ? hHistoryChosen : '1D'
+simple float hSamplingSeconds = timeframe.in_seconds(hHistoryTf)
+// Budget for at least one full current anchor plus a preceding boundary. Calendar
+// minutes are conservative here; this never manufactures a missing native anchor.
+simple float hVwapTargetMinutes = 2.0 * timeframe.in_seconds(timeframe.main_period) / 60.0 / 100000.0
+simple string hVwapAuto = hVwapTargetMinutes <= 1 ? '1' : hVwapTargetMinutes <= 3 ? '3' : hVwapTargetMinutes <= 5 ? '5' : hVwapTargetMinutes <= 15 ? '15' : hVwapTargetMinutes <= 30 ? '30' : '60'
+simple string hVwapTf = higher_vwap_tf == 'Auto' ? hVwapAuto : higher_vwap_tf
+
+// Switch Table Position
+tablePos = switch posTable
+    'Top Left' => position.top_left
+    'Top Centre' => position.top_center
+    'Top Right' => position.top_right
+    'Middle Left' => position.middle_left
+    'Middle Centre' => position.middle_center
+    'Middle Right' => position.middle_right
+    'Bottom Left' => position.bottom_left
+    'Bottom Centre' => position.bottom_center
+    'Bottom Right' => position.bottom_right
+// Switch Label Size
+size_tbl = switch tbl_size
+    'Normal'  => size.normal
+    'Tiny'    => size.tiny
+    'Small'   => size.small
+    'Large'   => size.large
+    'Extra Large' => size.huge
+// Switch Text Align
+align_txt_left = switch txt_align_left
+    'Left'   => text.align_left
+    'Center' => text.align_center
+    'Right'  => text.align_right
+align_txt_right = switch txt_align_right
+    'Left'   => text.align_left
+    'Center' => text.align_center
+    'Right'  => text.align_right
+// Helpers
+// Sum lower-timeframe values across a timestamp window. A partial edge bar is
+// time-weighted so the historical denominator advances with the live clock.
+f_windowSum(array<float> values, array<int> starts, array<int> ends, int fromTs, int toTs) =>
+    float total = 0.0
+    bool found = false
+    if not na(values) and not na(starts) and not na(ends) and not na(fromTs) and not na(toTs) and toTs > fromTs
+        int n = math.min(array.size(values), math.min(array.size(starts), array.size(ends)))
+        if n > 0
+            for j = 0 to n - 1
+                int barStart = array.get(starts, j)
+                int barEnd = array.get(ends, j)
+                if barStart >= toTs
+                    break
+                if barEnd > fromTs and barStart < toTs and barEnd > barStart
+                    int overlapStart = math.max(barStart, fromTs)
+                    int overlapEnd = math.min(barEnd, toTs)
+                    if overlapEnd > overlapStart
+                        float fraction = float(overlapEnd - overlapStart) / float(barEnd - barStart)
+                        total += array.get(values, j) * fraction
+                        found := true
+    found ? total : na
+// Sum only fully closed intrabars. If the provider includes a developing intrabar in the array,
+// it is deliberately excluded and recovered from the live daily-volume residual instead.
+f_closedSum(array<float> values, array<int> starts, array<int> ends, int fromTs, int cutoffTs) =>
+    float total = 0.0
+    bool found = false
+    if not na(values) and not na(starts) and not na(ends) and not na(fromTs) and not na(cutoffTs) and cutoffTs > fromTs
+        int n = math.min(array.size(values), math.min(array.size(starts), array.size(ends)))
+        if n > 0
+            for j = 0 to n - 1
+                int barStart = array.get(starts, j)
+                int barEnd = array.get(ends, j)
+                if barStart >= cutoffTs or barEnd > cutoffTs
+                    break
+                if barStart >= fromTs and barEnd > barStart
+                    total += array.get(values, j)
+                    found := true
+    found ? total : na
+// Return the high and low reached inside a timestamp window using only fully completed
+// lower-timeframe bars. This avoids leaking the remainder of a historical sampling bar
+// into the same-time ADR pace estimate. Use 1-minute sampling for the finest intraday read.
+f_windowHighLow(array<float> highs, array<float> lows, array<int> starts, array<int> ends, int fromTs, int toTs) =>
+    float winHigh = na
+    float winLow = na
+    if not na(highs) and not na(lows) and not na(starts) and not na(ends) and not na(fromTs) and not na(toTs) and toTs > fromTs
+        int n = math.min(math.min(array.size(highs), array.size(lows)), math.min(array.size(starts), array.size(ends)))
+        if n > 0
+            for j = 0 to n - 1
+                int barStart = array.get(starts, j)
+                int barEnd = array.get(ends, j)
+                if barStart >= toTs or barEnd > toTs
+                    break
+                if barStart >= fromTs and barEnd > barStart
+                    float h = array.get(highs, j)
+                    float l = array.get(lows, j)
+                    winHigh := na(winHigh) ? h : math.max(winHigh, h)
+                    winLow := na(winLow) ? l : math.min(winLow, l)
+    [winHigh, winLow]
+// Return the first/last available lower-timeframe timestamp.
+f_firstTimestamp(array<int> values) =>
+    int result = na
+    if not na(values) and array.size(values) > 0
+        result := array.get(values, 0)
+    result
+f_lastTimestamp(array<int> values) =>
+    int result = na
+    if not na(values) and array.size(values) > 0
+        result := array.get(values, array.size(values) - 1)
+    result
+// A regular-session daily bar must have a positive, plausible duration. If the data provider
+// does not supply defensible session bounds, the advanced same-time metrics return "-" rather
+// than guessing from the first or last trade of an incomplete/illiquid session.
+f_sessionBoundsValid(int sessionStart, int sessionEnd) =>
+    int sessionSpan = not na(sessionStart) and not na(sessionEnd) ? sessionEnd - sessionStart : 0
+    sessionSpan >= 30 * 60 * 1000 and sessionSpan <= 16 * 60 * 60 * 1000
+// These functions execute IN the requested lower-timeframe context on every source bar.
+// Its cumulative volume is independent of the arrays returned to the daily chart. Comparing
+// them detects a dropped prefix/internal slice without assuming a trade at the opening bell.
+f_nativeSessionVolume() =>
+    var float cumulative = 0.0
+    cumulative := timeframe.change('D') ? volume : cumulative + volume
+    cumulative
+
+// The first source session can begin part-way through a day at calc_bars_count's boundary.
+// Even a self-consistent cumulative total is not proof of completeness on that first day.
+// Exclude it conservatively; the valid-observation scan can replace it with another session.
+f_nativeSessionReady() =>
+    var int firstSourceSession = time('D')
+    time('D') != firstSourceSession
+
+// Status: 0 = usable, 1 = no intrabars, 2 = first/possibly clipped source session,
+// 3 = malformed arrays/session timestamps, 4 = source cumulative-volume mismatch.
+// A late first trade or an early last trade is NOT, by itself, missing data.
+// This validates retrieval from the supplied intraday feed, not the exchange's entire tape.
+f_sessionDataStatus(array<float> values, array<int> starts, array<int> ends, array<float> nativeCumulative, array<bool> nativeReady, int sessionStart, int sessionEnd) =>
+    int status = 1
+    bool arraysExist = not na(values) and not na(starts) and not na(ends) and not na(nativeCumulative) and not na(nativeReady)
+    if arraysExist
+        int n = array.size(values)
+        if n > 0
+            status := 3
+            bool sizesMatch = array.size(starts) == n and array.size(ends) == n and array.size(nativeCumulative) == n and array.size(nativeReady) == n
+            if sizesMatch and f_sessionBoundsValid(sessionStart, sessionEnd)
+                int firstStart = array.get(starts, 0)
+                int lastEnd = array.get(ends, n - 1)
+                bool timestampsValid = not na(firstStart) and not na(lastEnd) and firstStart >= sessionStart and lastEnd <= sessionEnd and lastEnd > firstStart
+                if timestampsValid
+                    if not array.get(nativeReady, 0) or not array.get(nativeReady, n - 1)
+                        status := 2
+                    else
+                        float rawTotal = array.sum(values)
+                        float nativeFirst = array.get(nativeCumulative, 0)
+                        float nativeLast = array.get(nativeCumulative, n - 1)
+                        float firstVolume = array.get(values, 0)
+                        float smallestVolume = array.min(values)
+                        float tolerance = math.max(0.000001, math.abs(nz(nativeLast)) * 0.00000001)
+                        bool totalsValid = not na(rawTotal) and not na(nativeFirst) and not na(nativeLast) and not na(firstVolume) and not na(smallestVolume) and smallestVolume >= 0 and rawTotal >= 0 and math.abs(nativeFirst - firstVolume) <= tolerance and math.abs(nativeLast - rawTotal) <= tolerance
+                        status := totalsValid ? 0 : 4
+    status
+// A derived relative-strength percentile, NOT an official IBD rank.
+// The GitHub request.seed calibration source may be missing or stale. Never
+// fabricate a 1-99 reading unless seven strictly ordered levels are present.
+// Scan only on the final source bar to reduce execution cost.
+f_rsCalibrated(float currentScore, float seedSeries) =>
+    float rating = na
+    if barstate.islast and not na(currentScore) and currentScore > 0
+        array<float> levels = array.new_float(0)
+        int scan = math.min(500, bar_index)
+        if scan >= 6
+            for i = 0 to scan
+                float level = seedSeries[i]
+                if not na(level) and level > 0 and not array.includes(levels, level)
+                    array.push(levels, level)
+                    if array.size(levels) >= 7
+                        break
+        if array.size(levels) == 7
+            bool strictlyOrdered = true
+            for j = 1 to 6
+                if array.get(levels, j - 1) <= array.get(levels, j)
+                    strictlyOrdered := false
+            if strictlyOrdered
+                float topLevel = array.get(levels, 0)
+                float bottomLevel = array.get(levels, 6)
+                if currentScore >= topLevel
+                    rating := 99.0
+                else if currentScore <= bottomLevel
+                    rating := 1.0
+                else
+                    for j = 0 to 5
+                        float upper = array.get(levels, j)
+                        float lower = array.get(levels, j + 1)
+                        if currentScore < upper and currentScore >= lower
+                            float highRank = j == 0 ? 98.0 : j == 1 ? 89.0 : j == 2 ? 69.0 : j == 3 ? 49.0 : j == 4 ? 29.0 : 9.0
+                            float lowRank = j == 0 ? 90.0 : j == 1 ? 70.0 : j == 2 ? 50.0 : j == 3 ? 30.0 : j == 4 ? 10.0 : 2.0
+                            rating := lowRank + (currentScore - lower) / (upper - lower) * (highRank - lowRank)
+                            break
+    rating
+
+// Convert a lower-timeframe window into an exact daily-feed-equivalent figure. The intraday
+// arrays determine what fraction of the session's volume had traded by the target time; the
+// confirmed regular-session daily total supplies the economic scale. This prevents DWM/LTF feed
+// differences from creating an artificially tiny or huge historical denominator.
+f_scaledHistoricalWindow(array<float> values, array<int> starts, array<int> ends, int sessionStart, int windowStart, int windowEnd, int sessionEnd, float exactDailyTotal) =>
+    float rawWindow = f_windowSum(values, starts, ends, windowStart, windowEnd)
+    float rawFull = f_windowSum(values, starts, ends, sessionStart, sessionEnd)
+    float result = na
+    // The caller validates the session first. No trades inside a valid window means ZERO,
+    // not an unavailable observation. A missing full-session array still returns na.
+    bool validWindow = not na(windowStart) and not na(windowEnd) and windowEnd > windowStart and windowStart >= sessionStart and windowEnd <= sessionEnd
+    if validWindow and not na(rawFull) and rawFull > 0 and not na(exactDailyTotal) and exactDailyTotal > 0
+        float completionFraction = math.min(math.max(nz(rawWindow, 0.0) / rawFull, 0.0), 1.0)
+        result := exactDailyTotal * completionFraction
+    result
+f_compactNumber(float value) =>
+    string result = '-'
+    if not na(value)
+        result := math.abs(value) >= 1000000000 ? str.tostring(value / 1000000000.0, '0.00') + 'B' : math.abs(value) >= 1000000 ? str.tostring(value / 1000000.0, '0.00') + 'M' : math.abs(value) >= 1000 ? str.tostring(value / 1000.0, '0.00') + 'K' : str.tostring(value, '0')
+    result
+f_signedPct(float value, string pattern) =>
+    na(value) ? '-' : (value > 0 ? '+' : '') + str.tostring(value, pattern) + '%'
+f_signedNumber(float value, string pattern, string suffix) =>
+    na(value) ? '-' : (value > 0 ? '+' : '') + str.tostring(value, pattern) + suffix
+
+// Expected Shortfall reference: average of the worst ceil(alpha*n) COMPLETED
+// returns. Unlike an empirical quantile, this describes realised tail severity.
+// This function is only called on the last source bar to avoid heavy per-bar sorting.
+f_recentES(float returnsSeries, int priorSampleCount, float alphaPercent) =>
+    float result = na
+    if priorSampleCount > 0
+        array<float> completed = array.new_float(0)
+        for j = 1 to priorSampleCount
+            float observed = returnsSeries[j]
+            if not na(observed)
+                array.push(completed, observed)
+        int validN = array.size(completed)
+        if validN >= priorSampleCount
+            array.sort(completed, order.ascending)
+            int tailN = math.max(1, int(math.ceil(validN * alphaPercent / 100.0)))
+            float tailSum = 0.0
+            for j = 0 to tailN - 1
+                tailSum += array.get(completed, j)
+            result := tailSum / tailN
+    result
+// Execute the entire VWAP calculation in ONE intraday source context. The cumulative
+// result returned on its latest minute already includes earlier source minutes; it is
+// NOT the VWAP of only the final minute. Native ta.vwap handles the developing source bar.
+// This feed-consistent calculation is independent of the RVOL history-sampling input.
+// The initial source session may be clipped by calc_bars_count, so it is not published.
+f_dailyVwapSnapshot() =>
+    bool newSourceSession = timeframe.change('1D')
+    float sourceVWAP = ta.vwap(hlc3, newSourceSession)
+    var int firstSourceSession = time('1D')
+    var float sourceVolume = 0.0
+    var bool invalidSource = false
+    if newSourceSession
+        sourceVolume := 0.0
+        invalidSource := false
+    if na(volume) or volume < 0
+        invalidSource := true
+    else
+        sourceVolume += volume
+        if volume > 0 and (na(hlc3) or hlc3 <= 0)
+            invalidSource := true
+    bool sourceReady = time('1D') != firstSourceSession and not invalidSource
+    [sourceVWAP, sourceVolume, time('1D'), time, time_close, close, sourceReady]
+
+// Higher-timeframe history carries a TRADING-SESSION coordinate, not elapsed calendar
+// time. 2.5 means two completed sessions plus half of the third session. Nights,
+// weekends and holidays without a session do not advance this coordinate.
+// This daily-source counter is independent of the historical intraday request.
+f_hDailyCalendar() =>
+    int anchor = time(timeframe.main_period)
+    bool reset = timeframe.change(timeframe.main_period)
+    var int firstAnchor = anchor
+    var int dayNumber = 0
+    if reset
+        dayNumber := 0
+    dayNumber += 1
+    [anchor, dayNumber, time, time_close, anchor != firstAnchor]
+
+// Runs in the chosen historical sampling context. The native cumulative volume
+// and session count allow a clipped/missing prefix to be rejected, not undercounted.
+f_hSource() =>
+    int anchor = time(timeframe.main_period)
+    bool reset = timeframe.change(timeframe.main_period)
+    bool newDay = timeframe.change('1D')
+    var int firstAnchor = anchor
+    var int dayNumber = 0
+    var float cumulative = 0.0
+    var bool invalid = false
+    if reset
+        dayNumber := 0
+        cumulative := 0.0
+        invalid := false
+    if reset or newDay or dayNumber == 0
+        dayNumber += 1
+    if na(volume) or volume < 0
+        invalid := true
+    else
+        cumulative += volume
+    int ds = time('1D')
+    int de = time_close('1D')
+    float duration = float(de - ds)
+    float a = duration > 0 ? float(dayNumber - 1) + float(time - ds) / duration : na
+    float b = duration > 0 ? float(dayNumber - 1) + float(time_close - ds) / duration : na
+    bool ready = anchor != firstAnchor and not invalid
+    [volume, time, time_close, hlc3 * volume, high, low, a, b, cumulative, ready, dayNumber]
+
+// Full-period validation. Sparse prints are allowed; missing source sessions are
+// detected by checking the source day count against the independent DAILY context.
+f_hStatus(array<float> vols, array<int> starts, array<int> ends, array<float> aa, array<float> bb, array<float> nativeVol, array<bool> ready, array<int> dayNo, int ps, int pe, int expectedDays, bool calendarReady) =>
+    int status = 1
+    bool exists = not na(vols) and not na(starts) and not na(ends) and not na(aa) and not na(bb) and not na(nativeVol) and not na(ready) and not na(dayNo)
+    if exists
+        int n = array.size(vols)
+        if n > 0
+            status := 3
+            bool sizes = array.size(starts) == n and array.size(ends) == n and array.size(aa) == n and array.size(bb) == n and array.size(nativeVol) == n and array.size(ready) == n and array.size(dayNo) == n
+            if sizes and not na(ps) and not na(pe) and pe > ps
+                int s0 = array.get(starts, 0)
+                int en = array.get(ends, n - 1)
+                bool times = not na(s0) and not na(en) and s0 >= ps and en <= pe and en > s0
+                if times
+                    if not array.get(ready, 0) or not array.get(ready, n - 1) or not calendarReady
+                        status := 2
+                    else if na(expectedDays) or expectedDays <= 0 or array.get(dayNo, 0) != 1 or array.get(dayNo, n - 1) != expectedDays
+                        status := 5
+                    else
+                        float total = array.sum(vols)
+                        float v0 = array.get(vols, 0)
+                        float nv0 = array.get(nativeVol, 0)
+                        float nvn = array.get(nativeVol, n - 1)
+                        float smallest = array.min(vols)
+                        float tol = math.max(0.000001, math.abs(nz(nvn)) * 0.00000001)
+                        bool valid = not na(total) and not na(v0) and not na(nv0) and not na(nvn) and not na(smallest) and smallest >= 0 and math.abs(v0 - nv0) <= tol and math.abs(total - nvn) <= tol
+                        float firstCoord = array.get(aa, 0)
+                        float lastCoord = array.get(bb, n - 1)
+                        valid := valid and not na(firstCoord) and not na(lastCoord) and firstCoord >= 0 and firstCoord < 1 and lastCoord <= float(expectedDays) + 0.000001
+                        status := valid ? 0 : 4
+    status
+
+// A partial historical edge interval is linearly time-weighted. This is an
+// explicitly disclosed approximation within that sampling bar, not exact tick data.
+f_hWindow(array<float> values, array<float> aa, array<float> bb, float fromCoord, float toCoord) =>
+    float result = na
+    if not na(values) and not na(aa) and not na(bb) and not na(fromCoord) and not na(toCoord) and toCoord >= fromCoord
+        int n = array.size(values)
+        if n > 0 and array.size(aa) == n and array.size(bb) == n
+            result := 0.0
+            if toCoord > fromCoord
+                for j = 0 to n - 1
+                    float a = array.get(aa, j)
+                    float b = array.get(bb, j)
+                    if a >= toCoord
+                        break
+                    if b > fromCoord and b > a
+                        float overlap = math.max(0.0, math.min(b, toCoord) - math.max(a, fromCoord))
+                        result += array.get(values, j) * overlap / (b - a)
+    result
+
+f_hHighLow(array<float> hh, array<float> ll, array<float> bb, float toCoord) =>
+    float h = na
+    float l = na
+    if not na(hh) and not na(ll) and not na(bb) and not na(toCoord)
+        int n = array.size(hh)
+        if n > 0 and array.size(ll) == n and array.size(bb) == n
+            for j = 0 to n - 1
+                if array.get(bb, j) > toCoord + 0.0000001
+                    break
+                float hj = array.get(hh, j)
+                float lj = array.get(ll, j)
+                h := na(h) ? hj : math.max(h, hj)
+                l := na(l) ? lj : math.min(l, lj)
+    [h, l]
+
+// Used ONLY for current-period per-block volume. Exclude the developing source bar;
+// the cumulative period-volume numerator remains live in cumulative mode.
+f_hClosedVolume(array<float> vols, array<int> ends, array<float> aa, array<float> bb, float fromCoord, float toCoord, int cutoff) =>
+    float result = na
+    if not na(vols) and not na(ends) and not na(aa) and not na(bb)
+        int n = array.size(vols)
+        if n > 0 and array.size(ends) == n and array.size(aa) == n and array.size(bb) == n
+            result := 0.0
+            for j = 0 to n - 1
+                if array.get(ends, j) > cutoff
+                    break
+                float a = array.get(aa, j)
+                float b = array.get(bb, j)
+                if a >= toCoord
+                    break
+                if b > fromCoord and b > a
+                    float overlap = math.max(0.0, math.min(b, toCoord) - math.max(a, fromCoord))
+                    result += array.get(vols, j) * overlap / (b - a)
+    result
+
+// A separate anchor for >1D. timeframe.main_period is invariant inside requests.
+f_hVwapSnapshot() =>
+    bool reset = timeframe.change(timeframe.main_period)
+    int anchor = time(timeframe.main_period)
+    float result = ta.vwap(hlc3, reset)
+    var int firstAnchor = anchor
+    var float cumulative = 0.0
+    var bool invalid = false
+    if reset
+        cumulative := 0.0
+        invalid := false
+    if na(volume) or volume < 0
+        invalid := true
+    else
+        cumulative += volume
+        if volume > 0 and (na(hlc3) or hlc3 <= 0)
+            invalid := true
+    [result, cumulative, anchor, time, time_close, close, anchor != firstAnchor and not invalid]
+
+// Calculation
+// ADR/ATR
+tf    = timeframe.period
+s     = syminfo.tickerid
+float arpLegacy = 100 * (ta.sma(low > 0 ? high / low : na, adrp_len) - 1)
+float arpComparable = 100 * ta.sma(close[1] > 0 ? (high - low) / close[1] : na, adrp_len)
+arp = adrp_basis == 'Low (legacy)' ? arpLegacy : arpComparable
+atr       = ta.atr(atr_len)
+atrp      = 100 * (atr/close)
+lod_dist  = 100 * (close - low) / atr
+lod_price = low
+// Intraday mirror (below 1D only). This function runs in the chart symbol's own 1D context,
+// so every length and [n] offset counts DAILY bars, exactly as on the 1D chart. The formulas
+// are copied from the 1D chart path; the 1D and higher charts never read these values.
+f_iChartDaily() =>
+    float dArpLegacy = 100 * (ta.sma(low > 0 ? high / low : na, adrp_len) - 1)
+    float dArpComparable = 100 * ta.sma(close[1] > 0 ? (high - low) / close[1] : na, adrp_len)
+    float dArp = adrp_basis == 'Low (legacy)' ? dArpLegacy : dArpComparable
+    float dAtr = ta.atr(atr_len)
+    float dRt = close / close[1] - 1
+    float dReturn = in_percent ? dRt * 100 : dRt
+    // On ANY chart the daily mirror judges risk from prior completed days.
+    int dVarCount = math.max(0, math.min(var_len, bar_index - 1))
+    int dVarLength = math.max(dVarCount, 1)
+    float dVarRaw = ta.percentile_linear_interpolation(dReturn[1], dVarLength, percentile)
+    float dVar5Raw = ta.percentile_linear_interpolation(dReturn[1], dVarLength, 5.0)
+    float dStdRaw = ta.stdev(dReturn[1], dVarLength)
+    bool dVarReady = dVarCount >= 126
+    float dVaR = dVarReady ? dVarRaw : na
+    float dVaR5 = dVarReady ? dVar5Raw : na
+    float dStd = dVarReady ? dStdRaw : na
+    float dStress = dVarReady ? dVaR - (3.0 * dStd) : na
+    float dES5 = dVarReady and barstate.islast ? f_recentES(dReturn, dVarCount, 5.0) : na
+    float dVolumeMA = ta.sma(volume[1], len)
+    float dDollarVolumeMA = ta.sma(volume[1] * close[1], dollar_vol_len)
+    float dUpVol = close > close[1] ? volume : 0
+    float dDnVol = close < close[1] ? volume : 0
+    float dDownVolume = math.sum(dDnVol, 50)
+    float dUpDnRatio = dDownVolume > 0 ? math.sum(dUpVol, 50) / dDownVolume : na
+    // RS score: same weights and IPO-safe horizons, counted in daily bars.
+    float dSpx = request.security('SP:SPX', 'D', close)
+    int d63 = bar_index < 63 ? bar_index : 63
+    int d126 = bar_index < 126 ? bar_index : 126
+    int d189 = bar_index < 189 ? bar_index : 189
+    int d252 = bar_index < 252 ? bar_index : 252
+    float dRsStock = 0.4 * (close / close[d63]) + 0.2 * (close / close[d126]) + 0.2 * (close / close[d189]) + 0.2 * (close / close[d252])
+    float dRsRef = 0.4 * (dSpx / dSpx[d63]) + 0.2 * (dSpx / dSpx[d126]) + 0.2 * (dSpx / dSpx[d189]) + 0.2 * (dSpx / dSpx[d252])
+    float dRsScore = not na(dRsRef) and dRsRef > 0 ? dRsStock / dRsRef * 100.0 : na
+    // Only an intact, strictly ordered external calibration is considered valid.
+    float dSeed = request.seed('seed_fred6725_rs_rating', 'RSRATING', close)
+    float dRsRating = f_rsCalibrated(dRsScore, dSeed)
+    [dArp, dArpComparable, dAtr, 100 * (dAtr / close), 100 * (close - low) / dAtr, low, dVaR, dVaR5, dES5, dStd, dStress, dVarCount, dVarReady, volume, dVolumeMA, dDollarVolumeMA, time, time_close, close, dUpDnRatio, dRsScore, dRsRating]
+[iArp, iArpComparable, iAtr, iAtrp, iLodDist, iLodPrice, iVaR, iVaR5, iES5, iVarStd, iVarStress, iVarCount, iVarReady, iDayVolume, iDayVolumeMA, iDayDollarVolumeMA, iDayStart, iDayEnd, iDayClose, iUpDnVolRatio, iRsScore, iRsRating] = request.security(s, '1D', f_iChartDaily(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true, calc_bars_count=tfIntraday ? 100000 : 2)
+// VaR Calculation
+// Historical one-day empirical VaR. The selected lookback is a MAXIMUM, not a hard maturity gate.
+// Publish only when at least 126 daily returns exist; otherwise show '-'.
+rt_formula = close / close[1] - 1
+return_ = in_percent ? rt_formula * 100 : rt_formula
+int varMinimumSamples = 126
+// Exclude the CURRENT day's developing/closed return; use 1..N prior returns.
+// bar_index-1 counts how many completed return pairs lie strictly before now.
+int varSampleCount = math.max(0, math.min(var_len, bar_index - 1))
+int varCalcLength = math.max(varSampleCount, 1)
+float VaR_raw = ta.percentile_linear_interpolation(return_[1], varCalcLength, percentile)
+float VaR5_raw = ta.percentile_linear_interpolation(return_[1], varCalcLength, 5.0)
+float std_dev_returns_raw = ta.stdev(return_[1], varCalcLength)
+bool varSampleReady = varSampleCount >= varMinimumSamples
+float VaR = varSampleReady ? VaR_raw : na
+float VaR5 = varSampleReady ? VaR5_raw : na
+float ES5 = varSampleReady and barstate.islast ? f_recentES(return_, varSampleCount, 5.0) : na
+float std_dev_returns = varSampleReady ? std_dev_returns_raw : na
+// Optional custom severity heuristic, NOT a second VaR confidence level.
+float VaR_plus_3sigma = varSampleReady ? VaR - (3.0 * std_dev_returns) : na
+// Below 1D, every daily-bar statistic above takes the 1D-chart value requested above.
+if tfIntraday
+    arp := iArp
+    arpComparable := iArpComparable
+    atr := iAtr
+    atrp := iAtrp
+    lod_dist := iLodDist
+    lod_price := iLodPrice
+    varSampleCount := iVarCount
+    varSampleReady := iVarReady
+    VaR := iVaR
+    VaR5 := iVaR5
+    ES5 := iES5
+    std_dev_returns := iVarStd
+    VaR_plus_3sigma := iVarStress
+string varSampleSuffix = varSampleReady and varSampleCount < var_len ? ' (n=' + str.tostring(varSampleCount) + ')' : ''
+string varTooltip = 'Historical lower-tail VaR (' + str.tostring(percentile) + '%) from COMPLETED returns before the current chart period. Maximum n=' + str.tostring(var_len) + ', current n=' + str.tostring(varSampleCount) + ', required minimum=' + str.tostring(varMinimumSamples) + '. A 1% tail with 252 observations has only ~2.5 expected tail observations: this is a noisy quantile, not the worst possible loss.'
+string var5Tooltip = 'Separate historical 5% signed return quantile from the same completed-period sample. The displayed percentage is a return threshold, not a guaranteed loss limit. n=' + str.tostring(varSampleCount) + '.'
+string esTooltip = 'Historical Expected Shortfall at 5% = average of the worst ceil(5% × n) completed returns in the same sample (no look-ahead to the current period). Unlike VaR this measures observed tail severity; small n still means considerable uncertainty. n=' + str.tostring(varSampleCount) + '.'
+string tailQuality = 'Completed returns=' + str.tostring(varSampleCount) + ', expected 1% tail count≈' + str.tostring(varSampleCount * 0.01, '0.0') + '. ' + (varSampleCount < 500 ? 'CAUTION: thin 1% tail.' : 'Tail coverage improved but still model-dependent.')
+string stressTooltip = 'Stress overlay = VaR - 3σ, where σ is the standard deviation of the same adaptive daily-return sample. This is a severity stress measure, not a separate conventional VaR confidence level. Current n=' + str.tostring(varSampleCount) + '.'
+// Available daily price-history duration (NOT a verified company IPO date).
+ipoSince = request.security(s, 'D', (bar_index+1)/252.0)
+// Volume
+vol   = request.security(s, tf, volume)
+ma = ta.sma(vol[1], len)
+// 1) Relative Volume
+relVol = not na(ma) and ma > 0 ? vol / ma * 100.0 : na
+// Tracks whether the first 30 minutes reached 50% of normal full-day volume.
+// The value is resolved below from regular-session intrabars so it also works
+// on the 1D chart, where session.ismarket alone cannot identify the opening window.
+bool relVolExceeded50InFirst30Min = false
+// 1b) Relative Volume at Time and participation/acceptance metrics.
+// These calculations are intended for the 1D chart. The comparison window is
+// defined by elapsed regular-session clock time rather than by array position.
+rvat_block_min = switch rvat_block
+    '15 min' => 15
+    '30 min' => 30
+    '1 hr'   => 60
+    '90 min' => 90
+    '2 hr'   => 120
+    '3 hr'   => 180
+    '4 hr'   => 240
+    => 30
+// Use a regular-session ticker so pre-market/post-market prints do not distort
+// the same-time comparison for equities.
+regularTicker = ticker.new(syminfo.prefix, syminfo.ticker, session.regular)
+[rvatDailyOpen, rvatDailyHigh, rvatDailyLow, rvatDailyClose, rvatDailyVolume, rvatDailyStart, rvatDailyEnd, rvatPreviousClose] = request.security(regularTicker, 'D', [open, high, low, close, volume, time, time_close, close[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+// Only the current session's cumulative VWAP snapshot is needed. Request a separate,
+// short 1-minute history, rather than coupling price accuracy to RVOL's sampling setting.
+// lookahead_off selects the latest intrabar result; all accumulation happens in the source.
+[vwapNativeValue, vwapNativeVolume, vwapNativeSession, vwapNativeBarStart, vwapNativeBarEnd, vwapNativeClose, vwapNativeReady] = request.security(regularTicker, '1', f_dailyVwapSnapshot(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true, calc_bars_count=5000)
+// 100,000 intrabars is a per-request budget on many plans, covering roughly 252 standard
+// 390-minute US equity sessions at 1-minute resolution. Longer-session markets may return fewer
+// than 252 comparable sessions at 1 minute; the table reports the actual usable sample size.
+[rvatIntraVols, rvatIntraStarts, rvatIntraEnds, rvatIntraPV, rvatIntraHighs, rvatIntraLows, rvatIntraNativeVolume, rvatIntraNativeReady] = request.security_lower_tf(regularTicker, rvat_intratf, [volume, time, time_close, hlc3 * volume, high, low, f_nativeSessionVolume(), f_nativeSessionReady()], ignore_invalid_symbol=true, ignore_invalid_timeframe=true, calc_bars_count=tfIntraday ? 2 : 100000)
+// TradingView exposes historical float shares as an annual financial series.
+// The live syminfo value is preferred for today's denominator; prior sessions
+// use the annual series as the native point-in-time history available in Pine.
+floatFYSeries = request.financial(s, 'FLOAT_SHARES_OUTSTANDING', 'FY', gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+float_live = syminfo.shares_outstanding_float
+FSO = na(float_live) or float_live <= 0 ? floatFYSeries : float_live
+// Parallel requests for higher chart periods. Same-symbol, regular-hours context.
+// Inactive higher-history requests are deliberately tiny on the 1D chart.
+[hPeriodOpen, hPeriodHigh, hPeriodLow, hPeriodClose, hPeriodVolume, hPeriodStart, hPeriodEnd, hPreviousClose] = request.security(regularTicker, timeframe.period, [open, high, low, close, volume, time, time_close, close[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+[hCalendarKey, hDayCount, hCalendarDayStart, hCalendarDayEnd, hCalendarReady] = request.security(regularTicker, '1D', f_hDailyCalendar(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true, calc_bars_count=100000)
+[hVols, hStarts, hEnds, hPVs, hHighs, hLows, hCoordsA, hCoordsB, hNativeVols, hReady, hDayNumbers] = request.security_lower_tf(regularTicker, hHistoryTf, f_hSource(), ignore_invalid_symbol=true, ignore_invalid_timeframe=true, calc_bars_count=tfHigher ? 100000 : 2)
+[hVwap, hVwapVolume, hVwapKey, hVwapStart, hVwapEnd, hVwapClose, hVwapReady] = request.security(regularTicker, hVwapTf, f_hVwapSnapshot(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true, calc_bars_count=tfHigher ? 100000 : 2)
+// One requested object carries the intraday mirror's results. Pine caps the combined size of
+// all requested tuples at 127 elements; an object keeps this build well inside that budget.
+type IntradayDailyEngine
+    int sessionStart
+    int cutoff
+    int elapsedMs
+    float firstThirtyVolume
+    float today
+    float intensity
+    float rvatAverage
+    float rvatFullDayAvg
+    float rvatCompletion
+    float projectionShareCompletion
+    float projectionDollarCompletion
+    int projectionSharesN
+    int projectionDollarN
+    float reportedPctile
+    float volumePctile
+    float adrProgressAvg
+    int rvatCount
+    int reportedCount
+    int volumeCount
+    int adrCount
+    int scanned
+    int badDaily
+    int shortSessions
+    int noIntrabars
+    int sourceBoundary
+    int malformed
+    int mismatch
+    int missingFloat
+    int noRange
+    int sparseAccepted
+    int zeroWindows
+    int rvatOldest
+    int rvatNewest
+    int rvatOldestBack
+    int reportedOldest
+    int reportedNewest
+    int reportedOldestBack
+    int volumeOldest
+    int volumeNewest
+    int volumeOldestBack
+    int adrOldest
+    int adrNewest
+    int adrOldestBack
+
+// Intraday mirror of the 1D same-time engine (below 1D only). It runs in the regular-session
+// 1D context, so [i] means i daily sessions back and each nested intrabar array belongs to one
+// daily session, exactly as on the 1D chart. The 1D engine below is not altered; this copy of
+// its logic only feeds intraday charts. 21 and 63 are the unchanged 1D publication floors.
+f_iDailyEngine() =>
+    [eVols, eStarts, eEnds, ePVs, eHighs, eLows, eNativeVolume, eNativeReady] = request.security_lower_tf(regularTicker, rvat_intratf, [volume, time, time_close, hlc3 * volume, high, low, f_nativeSessionVolume(), f_nativeSessionReady()], ignore_invalid_symbol=true, ignore_invalid_timeframe=true, calc_bars_count=tfIntraday ? 100000 : 2)
+    float eFloatFY = request.financial(s, 'FLOAT_SHARES_OUTSTANDING', 'FY', gaps=barmerge.gaps_off, ignore_invalid_symbol=true)
+    float eFloatLive = syminfo.shares_outstanding_float
+    float eFSO = na(eFloatLive) or eFloatLive <= 0 ? eFloatFY : eFloatLive
+    int sessionStart = time
+    int sessionEnd = time_close
+    int blockMs = rvat_block_min * 60 * 1000
+    int samplingMs = int(timeframe.in_seconds(rvat_intratf) * 1000)
+    int scanLimit = math.min(3000, 2 * math.max(math.max(math.max(rvat_len, participation_len), adr_pace_len), math.max(len, dollar_vol_len)))
+    bool resolutionCompatible = rvat_mode == 'Cumulative from open' or samplingMs <= blockMs
+    bool collectReported = participation_basis != 'Same-time volume only'
+    bool collectVolume = participation_basis != 'Reported historical float only'
+    bool dailyReady = f_sessionBoundsValid(sessionStart, sessionEnd) and not na(volume)
+    bool sessionActive = dailyReady and timenow >= sessionStart and timenow < sessionEnd
+    bool sessionComplete = dailyReady and timenow >= sessionEnd
+    bool sessionUsable = tfIntraday and barstate.islast and (sessionActive or sessionComplete)
+    int cutoff = na
+    int elapsedMs = 0
+    int sessionMs = 0
+    int blockStartElapsed = 0
+    float firstThirtyVolume = na
+    if sessionUsable
+        sessionMs := sessionEnd - sessionStart
+        cutoff := sessionActive ? math.min(math.max(timenow, sessionStart + 1), sessionEnd - 1) : sessionEnd
+        elapsedMs := math.max(cutoff - sessionStart, 0)
+        int firstThirtyEnd = math.min(sessionStart + 30 * 60 * 1000, sessionEnd)
+        firstThirtyVolume := elapsedMs <= 30 * 60 * 1000 ? volume : f_windowSum(eVols, eStarts, eEnds, sessionStart, firstThirtyEnd)
+        if elapsedMs > 0 and blockMs > 0
+            int elapsedForBlock = elapsedMs >= sessionMs and sessionMs > 0 ? sessionMs - 1 : elapsedMs
+            int blockIndex = int(math.floor(float(math.max(elapsedForBlock, 0)) / float(blockMs)))
+            blockStartElapsed := blockIndex * blockMs
+    float today = na
+    float intensity = na
+    float rvatAvg = na
+    float rvatFullAvg = na
+    float rvatCompletion = na
+    float projShareFraction = na
+    float projDollarFraction = na
+    float reportedPctile = na
+    float volumePctile = na
+    float adrProgressAvg = na
+    int rvatCount = 0
+    int reportedCount = 0
+    int volumeCount = 0
+    int adrCount = 0
+    int scanned = 0
+    int badDaily = 0
+    int shortSessions = 0
+    int noIntrabars = 0
+    int sourceBoundary = 0
+    int malformed = 0
+    int mismatch = 0
+    int missingFloat = 0
+    int noRange = 0
+    int sparseAccepted = 0
+    int zeroWindows = 0
+    int rvatOldest = na
+    int rvatNewest = na
+    int rvatOldestBack = 0
+    int reportedOldest = na
+    int reportedNewest = na
+    int reportedOldestBack = 0
+    int volumeOldest = na
+    int volumeNewest = na
+    int volumeOldestBack = 0
+    int adrOldest = na
+    int adrNewest = na
+    int adrOldestBack = 0
+    // Function-scope counters: the returned engine object uses these even when
+    // no session is usable. Keep them outside the conditional calculation block.
+    int projShareCount = 0
+    int projDollarCount = 0
+    if sessionUsable and elapsedMs > 0
+        // Today's cumulative numerator is the live regular-session daily volume, as on 1D.
+        if rvat_mode == 'Cumulative from open'
+            today := volume
+        else if resolutionCompatible
+            int currentBlockStart = sessionStart + blockStartElapsed
+            int currentDataStatus = f_sessionDataStatus(eVols, eStarts, eEnds, eNativeVolume, eNativeReady, sessionStart, sessionEnd)
+            float volumeBeforeBlock = currentBlockStart == sessionStart ? 0.0 : currentDataStatus == 0 ? nz(f_windowSum(eVols, eStarts, eEnds, sessionStart, currentBlockStart), 0.0) : na
+            if sessionComplete
+                float currentRawFull = f_windowSum(eVols, eStarts, eEnds, sessionStart, sessionEnd)
+                float scaledBeforeBlock = currentBlockStart == sessionStart ? 0.0 : not na(volumeBeforeBlock) and not na(currentRawFull) and currentRawFull > 0 ? volume * math.min(math.max(volumeBeforeBlock / currentRawFull, 0.0), 1.0) : na
+                today := not na(scaledBeforeBlock) ? math.max(volume - scaledBeforeBlock, 0.0) : na
+            else
+                today := not na(volumeBeforeBlock) ? math.max(volume - volumeBeforeBlock, 0.0) : na
+        if not na(eFSO) and eFSO > 0
+            intensity := 100.0 * volume / eFSO
+        float rvatSum = 0.0
+        float rvatFullSum = 0.0
+        float projShareFractionSum = 0.0
+        float projDollarFractionSum = 0.0
+        float reportedLess = 0.0
+        float reportedEqual = 0.0
+        float volumeLess = 0.0
+        float volumeEqual = 0.0
+        float adrProgressSum = 0.0
+        int maxHistory = math.min(scanLimit, bar_index)
+        if maxHistory > 0
+            for i = 1 to maxHistory
+                bool needRvat = rvatCount < rvat_len and resolutionCompatible
+                bool needParticipation = collectReported and reportedCount < participation_len and not na(intensity)
+                bool needVolumeParticipation = collectVolume and volumeCount < participation_len
+                bool needAdr = adrCount < adr_pace_len
+                bool needProjShares = projShareCount < len
+                bool needProjDollar = projDollarCount < dollar_vol_len
+                if not needRvat and not needParticipation and not needVolumeParticipation and not needAdr and not needProjShares and not needProjDollar
+                    break
+                int historicalStart = time[i]
+                int historicalEnd = time_close[i]
+                if na(historicalStart)
+                    break
+                scanned := i
+                float historicalDailyVolume = volume[i]
+                bool historicalBoundsValid = f_sessionBoundsValid(historicalStart, historicalEnd)
+                int historicalSessionMs = historicalBoundsValid ? historicalEnd - historicalStart : 0
+                bool historicalDailyValid = historicalBoundsValid and historicalEnd <= sessionStart and not na(historicalDailyVolume) and historicalDailyVolume >= 0
+                bool historicalReachesTarget = sessionComplete or historicalSessionMs >= elapsedMs
+                if not historicalDailyValid
+                    badDaily += 1
+                else if not historicalReachesTarget
+                    shortSessions += 1
+                else
+                    int historicalTarget = sessionComplete ? historicalEnd : historicalStart + elapsedMs
+                    bool historicalAtClose = sessionComplete
+                    bool reportedZeroDay = historicalDailyVolume == 0
+                    bool needsIntradayPath = not historicalAtClose or (needRvat and rvat_mode == 'Per-block')
+                    int dataStatus = needsIntradayPath and not reportedZeroDay ? f_sessionDataStatus(eVols[i], eStarts[i], eEnds[i], eNativeVolume[i], eNativeReady[i], historicalStart, historicalEnd) : 0
+                    bool pathUsable = dataStatus == 0
+                    if dataStatus == 1
+                        noIntrabars += 1
+                    else if dataStatus == 2
+                        sourceBoundary += 1
+                    else if dataStatus == 3
+                        malformed += 1
+                    else if dataStatus == 4
+                        mismatch += 1
+                    if needsIntradayPath and pathUsable and not reportedZeroDay
+                        int firstHistoricalPrint = f_firstTimestamp(eStarts[i])
+                        int lastHistoricalPrintEnd = f_lastTimestamp(eEnds[i])
+                        if firstHistoricalPrint - historicalStart > 60000 or historicalEnd - lastHistoricalPrintEnd > 60000
+                            sparseAccepted += 1
+                    float historicalCumulative = reportedZeroDay ? 0.0 : historicalAtClose ? historicalDailyVolume : pathUsable ? f_scaledHistoricalWindow(eVols[i], eStarts[i], eEnds[i], historicalStart, historicalStart, historicalTarget, historicalEnd, historicalDailyVolume) : na
+                    if not historicalAtClose and not na(historicalCumulative) and historicalCumulative == 0
+                        zeroWindows += 1
+                    // Independent intraday-seasonal completion profiles. The per-block
+                    // RVOL mode must NOT dictate the full-session projection.
+                    if needProjShares and historicalDailyVolume > 0 and not na(historicalCumulative)
+                        projShareFractionSum += math.min(math.max(historicalCumulative / historicalDailyVolume, 0.0), 1.0)
+                        projShareCount += 1
+                    if needProjDollar and pathUsable and not reportedZeroDay and not na(ePVs[i])
+                        float fullNotional = f_windowSum(ePVs[i], eStarts[i], eEnds[i], historicalStart, historicalEnd)
+                        float toTimeNotional = f_windowSum(ePVs[i], eStarts[i], eEnds[i], historicalStart, historicalTarget)
+                        if not na(fullNotional) and fullNotional > 0 and not na(toTimeNotional)
+                            projDollarFractionSum += math.min(math.max(toTimeNotional / fullNotional, 0.0), 1.0)
+                            projDollarCount += 1
+                    if needRvat
+                        float historicalRvat = na
+                        if rvat_mode == 'Cumulative from open'
+                            historicalRvat := historicalCumulative
+                        else
+                            int historicalBlockStart = historicalStart + blockStartElapsed
+                            if historicalBlockStart < historicalTarget and historicalBlockStart < historicalEnd
+                                historicalRvat := reportedZeroDay ? 0.0 : pathUsable ? f_scaledHistoricalWindow(eVols[i], eStarts[i], eEnds[i], historicalStart, historicalBlockStart, historicalTarget, historicalEnd, historicalDailyVolume) : na
+                        if not na(historicalRvat)
+                            rvatSum += historicalRvat
+                            rvatFullSum += historicalDailyVolume
+                            rvatCount += 1
+                            rvatOldest := historicalStart
+                            rvatOldestBack := i
+                            if na(rvatNewest)
+                                rvatNewest := historicalStart
+                    if needParticipation and not na(historicalCumulative)
+                        float historicalFloat = eFloatFY[i]
+                        if not na(historicalFloat) and historicalFloat > 0
+                            float historicalParticipation = 100.0 * historicalCumulative / historicalFloat
+                            float tieTolerance = math.max(math.abs(intensity), 1.0) * 0.0000001
+                            if historicalParticipation < intensity - tieTolerance
+                                reportedLess += 1.0
+                            else if math.abs(historicalParticipation - intensity) <= tieTolerance
+                                reportedEqual += 1.0
+                            reportedCount += 1
+                            reportedOldest := historicalStart
+                            reportedOldestBack := i
+                            if na(reportedNewest)
+                                reportedNewest := historicalStart
+                        else
+                            missingFloat += 1
+                    if needVolumeParticipation and not na(historicalCumulative)
+                        float volumeTieTolerance = math.max(math.abs(volume), 1.0) * 0.0000001
+                        if historicalCumulative < volume - volumeTieTolerance
+                            volumeLess += 1.0
+                        else if math.abs(historicalCumulative - volume) <= volumeTieTolerance
+                            volumeEqual += 1.0
+                        volumeCount += 1
+                        volumeOldest := historicalStart
+                        volumeOldestBack := i
+                        if na(volumeNewest)
+                            volumeNewest := historicalStart
+                    if needAdr and (historicalAtClose or pathUsable) and not reportedZeroDay
+                        float historicalRangeProgress = na
+                        if historicalAtClose
+                            historicalRangeProgress := 1.0
+                        else
+                            [historicalFullHigh, historicalFullLow] = f_windowHighLow(eHighs[i], eLows[i], eStarts[i], eEnds[i], historicalStart, historicalEnd)
+                            [historicalHighToTime, historicalLowToTime] = f_windowHighLow(eHighs[i], eLows[i], eStarts[i], eEnds[i], historicalStart, historicalTarget)
+                            float historicalFullRange = not na(historicalFullHigh) and not na(historicalFullLow) ? historicalFullHigh - historicalFullLow : na
+                            if not na(historicalFullRange) and historicalFullRange > 0 and not na(historicalHighToTime) and not na(historicalLowToTime)
+                                historicalRangeProgress := math.min(math.max((historicalHighToTime - historicalLowToTime) / historicalFullRange, 0.0), 1.0)
+                        if not na(historicalRangeProgress) and historicalRangeProgress > 0
+                            adrProgressSum += historicalRangeProgress
+                            adrCount += 1
+                            adrOldest := historicalStart
+                            adrOldestBack := i
+                            if na(adrNewest)
+                                adrNewest := historicalStart
+                        else
+                            noRange += 1
+        if rvatCount >= 21
+            rvatAvg := rvatSum / rvatCount
+            rvatFullAvg := rvatFullSum / rvatCount
+            rvatCompletion := rvatFullAvg > 0 ? rvatAvg / rvatFullAvg : na
+            bool rvatArithmeticValid = rvat_mode != 'Cumulative from open' or (not na(rvatCompletion) and rvatCompletion >= 0 and rvatCompletion <= 1.000001)
+            if not rvatArithmeticValid
+                rvatAvg := na
+                rvatCompletion := na
+        reportedPctile := reportedCount >= 63 ? 100.0 * (reportedLess + 0.5 * reportedEqual) / reportedCount : na
+        volumePctile := volumeCount >= 63 ? 100.0 * (volumeLess + 0.5 * volumeEqual) / volumeCount : na
+        adrProgressAvg := adrCount >= 21 ? adrProgressSum / adrCount : na
+        projShareFraction := projShareCount >= 21 ? projShareFractionSum / projShareCount : na
+        projDollarFraction := projDollarCount >= 21 ? projDollarFractionSum / projDollarCount : na
+    IntradayDailyEngine.new(sessionStart = sessionStart, cutoff = cutoff, elapsedMs = elapsedMs, firstThirtyVolume = firstThirtyVolume, today = today, intensity = intensity, rvatAverage = rvatAvg, rvatFullDayAvg = rvatFullAvg, rvatCompletion = rvatCompletion, projectionShareCompletion = projShareFraction, projectionDollarCompletion = projDollarFraction, projectionSharesN = projShareCount, projectionDollarN = projDollarCount, reportedPctile = reportedPctile, volumePctile = volumePctile, adrProgressAvg = adrProgressAvg, rvatCount = rvatCount, reportedCount = reportedCount, volumeCount = volumeCount, adrCount = adrCount, scanned = scanned, badDaily = badDaily, shortSessions = shortSessions, noIntrabars = noIntrabars, sourceBoundary = sourceBoundary, malformed = malformed, mismatch = mismatch, missingFloat = missingFloat, noRange = noRange, sparseAccepted = sparseAccepted, zeroWindows = zeroWindows, rvatOldest = rvatOldest, rvatNewest = rvatNewest, rvatOldestBack = rvatOldestBack, reportedOldest = reportedOldest, reportedNewest = reportedNewest, reportedOldestBack = reportedOldestBack, volumeOldest = volumeOldest, volumeNewest = volumeNewest, volumeOldestBack = volumeOldestBack, adrOldest = adrOldest, adrNewest = adrNewest, adrOldestBack = adrOldestBack)
+IntradayDailyEngine iEngine = request.security(regularTicker, '1D', f_iDailyEngine(), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true, calc_bars_count=tfIntraday ? 100000 : 2)
+// The mirror is used only when it describes the same regular session as the daily feed.
+bool iEngineAligned = false
+if tfIntraday and not na(iEngine)
+    iEngineAligned := not na(iEngine.cutoff) and iEngine.sessionStart == rvatDailyStart
+
+int rvatCutoff = na
+float rvatElapsedMinutes = na
+float rvatSessionProgress = na
+int rvatElapsedMs = 0
+int rvatSessionMs = 0
+int rvatBlockMs = rvat_block_min * 60 * 1000
+int rvatBlockIndex = 0
+int rvatBlockStartElapsed = 0
+int rvatSamplingMs = int(timeframe.in_seconds(rvat_intratf) * 1000)
+// Scan at most twice the maximum requested sample, capped at 3,000 chart bars.
+// TradingView source-bar budgets can independently shorten valid same-time history.
+// Valid n, inspected bars and exclusions are exposed; a requested 1,260 n is not invented.
+int sameTimeScanLimit = math.min(3000, 2 * math.max(math.max(math.max(rvat_len, participation_len), adr_pace_len), math.max(len, dollar_vol_len)))
+bool rvatResolutionCompatible = rvat_mode == 'Cumulative from open' or rvatSamplingMs <= rvatBlockMs
+// ticker.new(..., session.regular) is requested above, so its daily time/time_close values are
+// the authoritative regular-session boundaries. Do not re-anchor them to the first print: an
+// illiquid symbol may simply have no trade at the bell.
+int currentSessionStart = rvatDailyStart
+int currentSessionEnd = rvatDailyEnd
+bool currentSessionBoundsValid = f_sessionBoundsValid(currentSessionStart, currentSessionEnd)
+bool advancedDailyReady = timeframe.isdaily and timeframe.multiplier == 1 and currentSessionBoundsValid and not na(rvatDailyVolume)
+bool rvatSessionActive = advancedDailyReady and timenow >= currentSessionStart and timenow < currentSessionEnd
+bool rvatSessionComplete = advancedDailyReady and timenow >= currentSessionEnd
+bool rvatSessionUsable = rvatSessionActive or rvatSessionComplete
+if barstate.islast and rvatSessionUsable
+    rvatSessionMs := currentSessionEnd - currentSessionStart
+    // Always use the actual script clock during an open session. The previous build sometimes
+    // treated the latest daily bar as complete and therefore compared an intraday numerator with
+    // full-day history. The clamp prevents pre-open or post-close leakage.
+    rvatCutoff := rvatSessionActive ? math.min(math.max(timenow, currentSessionStart + 1), currentSessionEnd - 1) : currentSessionEnd
+    rvatElapsedMs := math.max(rvatCutoff - currentSessionStart, 0)
+    rvatElapsedMinutes := float(rvatElapsedMs) / 60000.0
+    rvatSessionProgress := rvatSessionMs > 0 ? float(rvatElapsedMs) / float(rvatSessionMs) : na
+    int firstThirtyEnd = math.min(currentSessionStart + 30 * 60 * 1000, currentSessionEnd)
+    float firstThirtyVolume = rvatElapsedMs <= 30 * 60 * 1000 ? rvatDailyVolume : f_windowSum(rvatIntraVols, rvatIntraStarts, rvatIntraEnds, currentSessionStart, firstThirtyEnd)
+    relVolExceeded50InFirst30Min := not na(firstThirtyVolume) and not na(ma) and ma > 0 and 100.0 * firstThirtyVolume / ma > 50.0
+    if rvatElapsedMs > 0 and rvatBlockMs > 0
+        int elapsedForBlock = rvatElapsedMs >= rvatSessionMs and rvatSessionMs > 0 ? rvatSessionMs - 1 : rvatElapsedMs
+        rvatBlockIndex := int(math.floor(float(math.max(elapsedForBlock, 0)) / float(rvatBlockMs)))
+        rvatBlockStartElapsed := rvatBlockIndex * rvatBlockMs
+float rvatToday = na
+float rvatAverage = na
+float rvatRatio = na
+float rvatValue = na
+float participationIntensity = na
+float participationPctile = na
+int rvatSampleCount = 0
+int participationSampleCount = 0
+int participationReportedCount = 0
+float participationReportedPctile = na
+int participationVolumeCount = 0
+float participationVolumePctile = na
+bool participationUsesVolumeProxy = false
+int participationVolumeOldestStart = na
+int participationVolumeNewestStart = na
+int participationVolumeOldestOffset = 0
+bool participationCollectReported = participation_basis != 'Same-time volume only'
+bool participationCollectVolume = participation_basis != 'Reported historical float only'
+float sessionDollarVolume = na
+float sessionVWAP = na
+float economicThroughput = na
+float dayRangePosition = na
+float directionalEfficiency = na
+float distanceFromVWAP = na
+float priceImpactPerTurnover = na
+float adrPaceAtTime = na
+float adrRangeProgressAvg = na
+int adrPaceSampleCount = 0
+float rvatHistoricalFullDayAvg = na
+float rvatHistoricalCompletion = na
+float projectionShareCompletion = na
+float projectionDollarCompletion = na
+int projectionShareN = 0
+int projectionDollarN = 0
+// Diagnostics do not alter table layout. Counts refer to candidates inspected while filling
+// the independent samples; a rejection category may apply to only one of the metrics.
+int historyScanned = 0
+int historyBadDaily = 0
+int historyShortSessions = 0
+int historyNoIntrabars = 0
+int historySourceBoundary = 0
+int historyMalformed = 0
+int historyCumulativeMismatch = 0
+int historyMissingFloat = 0
+int historyNoRange = 0
+int historySparseAccepted = 0
+int historyZeroWindows = 0
+int rvatOldestStart = na
+int participationOldestStart = na
+int adrOldestStart = na
+int rvatNewestStart = na
+int participationNewestStart = na
+int adrNewestStart = na
+int rvatOldestOffset = 0
+int participationOldestOffset = 0
+int adrOldestOffset = 0
+// Adaptive-history publication floors. User lookbacks are maxima rather than hard maturity gates.
+// Percentile rankings need 63 observations; same-time averages/range-shape estimates need 21.
+int rvatRequiredSamples = 21
+int participationRequiredSamples = 63
+int adrRequiredSamples = 21
+if barstate.islast and rvatSessionUsable and rvatElapsedMs > 0
+    // Today's cumulative numerator comes directly from the regular-session daily feed and is live.
+    if rvat_mode == 'Cumulative from open'
+        rvatToday := rvatDailyVolume
+    else if rvatResolutionCompatible
+        int currentBlockStart = currentSessionStart + rvatBlockStartElapsed
+        int currentDataStatus = f_sessionDataStatus(rvatIntraVols, rvatIntraStarts, rvatIntraEnds, rvatIntraNativeVolume, rvatIntraNativeReady, currentSessionStart, currentSessionEnd)
+        float volumeBeforeBlock = currentBlockStart == currentSessionStart ? 0.0 : currentDataStatus == 0 ? nz(f_windowSum(rvatIntraVols, rvatIntraStarts, rvatIntraEnds, currentSessionStart, currentBlockStart), 0.0) : na
+        if rvatSessionComplete
+            float currentRawFull = f_windowSum(rvatIntraVols, rvatIntraStarts, rvatIntraEnds, currentSessionStart, currentSessionEnd)
+            float scaledBeforeBlock = currentBlockStart == currentSessionStart ? 0.0 : not na(volumeBeforeBlock) and not na(currentRawFull) and currentRawFull > 0 ? rvatDailyVolume * math.min(math.max(volumeBeforeBlock / currentRawFull, 0.0), 1.0) : na
+            rvatToday := not na(scaledBeforeBlock) ? math.max(rvatDailyVolume - scaledBeforeBlock, 0.0) : na
+        else
+            rvatToday := not na(volumeBeforeBlock) ? math.max(rvatDailyVolume - volumeBeforeBlock, 0.0) : na
+    if not na(FSO) and FSO > 0
+        participationIntensity := 100.0 * rvatDailyVolume / FSO
+    // Never assign a daily/intraday volume discrepancy to the latest price. That pulls
+    // the reconstructed VWAP towards the quote and compresses the displayed distance.
+    // Reject missing, initial-clipped or wrong-session data instead of inventing a VWAP.
+    bool vwapSessionMatches = not na(vwapNativeSession) and vwapNativeSession == currentSessionStart and not na(vwapNativeBarStart) and not na(vwapNativeBarEnd) and vwapNativeBarStart >= currentSessionStart and vwapNativeBarStart < rvatCutoff and vwapNativeBarEnd > vwapNativeBarStart and vwapNativeBarEnd <= currentSessionEnd
+    bool vwapSourceUsable = vwapSessionMatches and vwapNativeReady and not na(vwapNativeValue) and vwapNativeValue > 0 and not na(vwapNativeVolume) and vwapNativeVolume > 0
+    sessionVWAP := vwapSourceUsable ? vwapNativeValue : na
+    // Economic throughput remains an ESTIMATE: apply the observed intraday average
+    // execution-price proxy uniformly to daily-feed volume, never residual-at-close.
+    // This does not make the intraday feed a consolidated transaction-level VWAP.
+    sessionDollarVolume := not na(sessionVWAP) ? sessionVWAP * rvatDailyVolume : na
+    float freeFloatMarketCapNow = not na(FSO) and FSO > 0 and rvatDailyClose > 0 ? FSO * rvatDailyClose : na
+    economicThroughput := not na(freeFloatMarketCapNow) and freeFloatMarketCapNow > 0 ? 100.0 * sessionDollarVolume / freeFloatMarketCapNow : na
+    dayRangePosition := rvatDailyHigh > rvatDailyLow ? 100.0 * (rvatDailyClose - rvatDailyLow) / (rvatDailyHigh - rvatDailyLow) : na
+    directionalEfficiency := rvatDailyHigh > rvatDailyLow ? 100.0 * (rvatDailyClose - rvatDailyOpen) / (rvatDailyHigh - rvatDailyLow) : na
+    distanceFromVWAP := not na(sessionVWAP) and sessionVWAP > 0 ? 100.0 * (rvatDailyClose / sessionVWAP - 1.0) : na
+    float priceImpactReturn = price_impact_basis == 'Open to current' ? (rvatDailyOpen > 0 ? 100.0 * (rvatDailyClose / rvatDailyOpen - 1.0) : na) : (rvatPreviousClose > 0 ? 100.0 * (rvatDailyClose / rvatPreviousClose - 1.0) : na)
+    priceImpactPerTurnover := not na(participationIntensity) and participationIntensity > 0 ? priceImpactReturn / participationIntensity : na
+    float rvatHistoricalSum = 0.0
+    float rvatHistoricalFullDaySum = 0.0
+    float projShareFractionSum = 0.0
+    float projDollarFractionSum = 0.0
+    int projShareCount = 0
+    int projDollarCount = 0
+    int rvatHistoricalCount = 0
+    float participationLess = 0.0
+    float participationEqual = 0.0
+    int participationCount = 0
+    float participationVolumeLess = 0.0
+    float participationVolumeEqual = 0.0
+    float adrRangeProgressSum = 0.0
+    int adrRangeProgressCount = 0
+    int maxHistory = math.min(sameTimeScanLimit, bar_index)
+    if maxHistory > 0
+        for i = 1 to maxHistory
+            bool needRvat = rvatHistoricalCount < rvat_len and rvatResolutionCompatible
+            bool needParticipation = participationCollectReported and participationCount < participation_len and not na(participationIntensity)
+            bool needVolumeParticipation = participationCollectVolume and participationVolumeCount < participation_len
+            bool needAdr = adrRangeProgressCount < adr_pace_len
+            bool needProjShares = projShareCount < len
+            bool needProjDollar = projDollarCount < dollar_vol_len
+            if not needRvat and not needParticipation and not needVolumeParticipation and not needAdr and not needProjShares and not needProjDollar
+                break
+            int historicalStart = rvatDailyStart[i]
+            int historicalEnd = rvatDailyEnd[i]
+            if na(historicalStart)
+                break
+            historyScanned := i
+            float historicalDailyVolume = rvatDailyVolume[i]
+            bool historicalBoundsValid = f_sessionBoundsValid(historicalStart, historicalEnd)
+            int historicalSessionMs = historicalBoundsValid ? historicalEnd - historicalStart : 0
+            bool historicalDailyValid = historicalBoundsValid and historicalEnd <= currentSessionStart and not na(historicalDailyVolume) and historicalDailyVolume >= 0
+            bool historicalReachesTarget = rvatSessionComplete or historicalSessionMs >= rvatElapsedMs
+            if not historicalDailyValid
+                historyBadDaily += 1
+            else if not historicalReachesTarget
+                // Do not compare, for example, today's 14:00 with a session that ended at 13:00.
+                historyShortSessions += 1
+            else
+                int historicalTarget = rvatSessionComplete ? historicalEnd : historicalStart + rvatElapsedMs
+                bool historicalAtClose = rvatSessionComplete
+                bool reportedZeroDay = historicalDailyVolume == 0
+                // Full-day cumulative comparisons use confirmed daily volume directly. They do not
+                // require intrabar history. Per-block comparisons always need an intraday path.
+                bool needsIntradayPath = not historicalAtClose or (needRvat and rvat_mode == 'Per-block')
+                int dataStatus = needsIntradayPath and not reportedZeroDay ? f_sessionDataStatus(rvatIntraVols[i], rvatIntraStarts[i], rvatIntraEnds[i], rvatIntraNativeVolume[i], rvatIntraNativeReady[i], historicalStart, historicalEnd) : 0
+                bool pathUsable = dataStatus == 0
+                if dataStatus == 1
+                    historyNoIntrabars += 1
+                else if dataStatus == 2
+                    historySourceBoundary += 1
+                else if dataStatus == 3
+                    historyMalformed += 1
+                else if dataStatus == 4
+                    historyCumulativeMismatch += 1
+                if needsIntradayPath and pathUsable and not reportedZeroDay
+                    int firstHistoricalPrint = f_firstTimestamp(rvatIntraStarts[i])
+                    int lastHistoricalPrintEnd = f_lastTimestamp(rvatIntraEnds[i])
+                    if firstHistoricalPrint - historicalStart > 60000 or historicalEnd - lastHistoricalPrintEnd > 60000
+                        historySparseAccepted += 1
+                float historicalCumulative = reportedZeroDay ? 0.0 : historicalAtClose ? historicalDailyVolume : pathUsable ? f_scaledHistoricalWindow(rvatIntraVols[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalStart, historicalTarget, historicalEnd, historicalDailyVolume) : na
+                if not historicalAtClose and not na(historicalCumulative) and historicalCumulative == 0
+                    historyZeroWindows += 1
+                // Seasonal projection is collected independently of cumulative/per-block
+                // RVOL display. Valid same-time historical paths only; never clock linear.
+                if needProjShares and historicalDailyVolume > 0 and not na(historicalCumulative)
+                    projShareFractionSum += math.min(math.max(historicalCumulative / historicalDailyVolume, 0.0), 1.0)
+                    projShareCount += 1
+                if needProjDollar and pathUsable and not reportedZeroDay
+                    float fullNotional = f_windowSum(rvatIntraPV[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalEnd)
+                    float partNotional = f_windowSum(rvatIntraPV[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalTarget)
+                    if not na(fullNotional) and fullNotional > 0 and not na(partNotional)
+                        projDollarFractionSum += math.min(math.max(partNotional / fullNotional, 0.0), 1.0)
+                        projDollarCount += 1
+                if needRvat
+                    float historicalRvat = na
+                    if rvat_mode == 'Cumulative from open'
+                        historicalRvat := historicalCumulative
+                    else
+                        int historicalBlockStart = historicalStart + rvatBlockStartElapsed
+                        if historicalBlockStart < historicalTarget and historicalBlockStart < historicalEnd
+                            historicalRvat := reportedZeroDay ? 0.0 : pathUsable ? f_scaledHistoricalWindow(rvatIntraVols[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalBlockStart, historicalTarget, historicalEnd, historicalDailyVolume) : na
+                    if not na(historicalRvat)
+                        rvatHistoricalSum += historicalRvat
+                        rvatHistoricalFullDaySum += historicalDailyVolume
+                        rvatHistoricalCount += 1
+                        rvatOldestStart := historicalStart
+                        rvatOldestOffset := i
+                        if na(rvatNewestStart)
+                            rvatNewestStart := historicalStart
+                if needParticipation and not na(historicalCumulative)
+                    float historicalFloat = floatFYSeries[i]
+                    if not na(historicalFloat) and historicalFloat > 0
+                        float historicalParticipation = 100.0 * historicalCumulative / historicalFloat
+                        float tieTolerance = math.max(math.abs(participationIntensity), 1.0) * 0.0000001
+                        if historicalParticipation < participationIntensity - tieTolerance
+                            participationLess += 1.0
+                        else if math.abs(historicalParticipation - participationIntensity) <= tieTolerance
+                            participationEqual += 1.0
+                        participationCount += 1
+                        participationOldestStart := historicalStart
+                        participationOldestOffset := i
+                        if na(participationNewestStart)
+                            participationNewestStart := historicalStart
+                    else
+                        historyMissingFloat += 1
+                // The proxy ranks cumulative VOLUME at the same elapsed session point. It does
+                // not depend on historical float and does not mix denominator sources. Dividing
+                // every volume by the same positive float would give the same ordering.
+                // Only validated historicalCumulative values enter; missing data is never zeroed.
+                if needVolumeParticipation and not na(historicalCumulative)
+                    float volumeTieTolerance = math.max(math.abs(rvatDailyVolume), 1.0) * 0.0000001
+                    if historicalCumulative < rvatDailyVolume - volumeTieTolerance
+                        participationVolumeLess += 1.0
+                    else if math.abs(historicalCumulative - rvatDailyVolume) <= volumeTieTolerance
+                        participationVolumeEqual += 1.0
+                    participationVolumeCount += 1
+                    participationVolumeOldestStart := historicalStart
+                    participationVolumeOldestOffset := i
+                    if na(participationVolumeNewestStart)
+                        participationVolumeNewestStart := historicalStart
+                // Preserve the existing ADR range-development formula and closed-bar policy.
+                if needAdr and (historicalAtClose or pathUsable) and not reportedZeroDay
+                    float historicalRangeProgress = na
+                    if historicalAtClose
+                        historicalRangeProgress := 1.0
+                    else
+                        [historicalFullHigh, historicalFullLow] = f_windowHighLow(rvatIntraHighs[i], rvatIntraLows[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalEnd)
+                        [historicalHighToTime, historicalLowToTime] = f_windowHighLow(rvatIntraHighs[i], rvatIntraLows[i], rvatIntraStarts[i], rvatIntraEnds[i], historicalStart, historicalTarget)
+                        float historicalFullRange = not na(historicalFullHigh) and not na(historicalFullLow) ? historicalFullHigh - historicalFullLow : na
+                        if not na(historicalFullRange) and historicalFullRange > 0 and not na(historicalHighToTime) and not na(historicalLowToTime)
+                            historicalRangeProgress := math.min(math.max((historicalHighToTime - historicalLowToTime) / historicalFullRange, 0.0), 1.0)
+                    if not na(historicalRangeProgress) and historicalRangeProgress > 0
+                        adrRangeProgressSum += historicalRangeProgress
+                        adrRangeProgressCount += 1
+                        adrOldestStart := historicalStart
+                        adrOldestOffset := i
+                        if na(adrNewestStart)
+                            adrNewestStart := historicalStart
+                    else
+                        historyNoRange += 1
+    // Fail closed rather than publish a trading signal from a thin or malformed sample.
+    if rvatHistoricalCount >= rvatRequiredSamples
+        rvatAverage := rvatHistoricalSum / rvatHistoricalCount
+        rvatHistoricalFullDayAvg := rvatHistoricalFullDaySum / rvatHistoricalCount
+        rvatHistoricalCompletion := rvatHistoricalFullDayAvg > 0 ? rvatAverage / rvatHistoricalFullDayAvg : na
+        // A cumulative same-time average must lie between zero and its matched full-day average.
+        bool rvatArithmeticValid = rvat_mode != 'Cumulative from open' or (not na(rvatHistoricalCompletion) and rvatHistoricalCompletion >= 0 and rvatHistoricalCompletion <= 1.000001)
+        if not rvatArithmeticValid
+            rvatAverage := na
+            rvatHistoricalCompletion := na
+    rvatRatio := not na(rvatToday) and not na(rvatAverage) and rvatAverage > 0 ? rvatToday / rvatAverage : na
+    rvatValue := rvat_output == 'Difference (+/- %)' ? (not na(rvatRatio) ? 100.0 * (rvatRatio - 1.0) : na) : rvat_output == 'Index (100 = average)' ? (not na(rvatRatio) ? 100.0 * rvatRatio : na) : rvatRatio
+    participationReportedCount := participationCount
+    participationReportedPctile := participationCount >= participationRequiredSamples ? 100.0 * (participationLess + 0.5 * participationEqual) / participationCount : na
+    participationVolumePctile := participationVolumeCount >= participationRequiredSamples ? 100.0 * (participationVolumeLess + 0.5 * participationVolumeEqual) / participationVolumeCount : na
+    // Prefer the original measure whenever its full requested sample exists. Otherwise use
+    // the explicitly labelled proxy only if it offers MORE valid observations and passes
+    // the unchanged minimum. Intrabar gaps alone cannot be cured by a different float basis.
+    bool autoSelectVolume = participation_basis == 'Auto (historical float; volume fallback)' and participationReportedCount < participation_len and participationVolumeCount > participationReportedCount and participationVolumeCount >= participationRequiredSamples
+    participationUsesVolumeProxy := participation_basis == 'Same-time volume only' or autoSelectVolume
+    participationPctile := participationUsesVolumeProxy ? participationVolumePctile : participationReportedPctile
+    adrRangeProgressAvg := adrRangeProgressCount >= adrRequiredSamples ? adrRangeProgressSum / adrRangeProgressCount : na
+    projectionShareN := projShareCount
+    projectionDollarN := projDollarCount
+    projectionShareCompletion := projShareCount >= 21 ? projShareFractionSum / projShareCount : na
+    projectionDollarCompletion := projDollarCount >= 21 ? projDollarFractionSum / projDollarCount : na
+    float adrOpenToCurrent = rvatDailyOpen > 0 ? 100.0 * (rvatDailyClose / rvatDailyOpen - 1.0) : na
+    float expectedAdrToTime = not na(adrRangeProgressAvg) and adrRangeProgressAvg > 0 and arp > 0 ? arp * adrRangeProgressAvg : na
+    adrPaceAtTime := not na(adrOpenToCurrent) and not na(expectedAdrToTime) and expectedAdrToTime > 0 ? adrOpenToCurrent / expectedAdrToTime : na
+    rvatSampleCount := rvatHistoricalCount
+    participationSampleCount := participationUsesVolumeProxy ? participationVolumeCount : participationReportedCount
+    adrPaceSampleCount := adrRangeProgressCount
+// ============================================================================
+// INTRADAY DAILY MIRROR: below 1D, publish the 1D readings computed in the requested
+// regular-session 1D context. Intraday candles never become same-time observations.
+// Current-day price, VWAP and session values use the same daily bar as the 1D chart.
+// ============================================================================
+if barstate.islast and tfIntraday
+    advancedDailyReady := currentSessionBoundsValid and not na(rvatDailyVolume)
+    rvatSessionActive := advancedDailyReady and timenow >= currentSessionStart and timenow < currentSessionEnd
+    rvatSessionComplete := advancedDailyReady and timenow >= currentSessionEnd
+    // Fail closed unless the requested 1D engine is on the same session as the daily feed.
+    rvatSessionUsable := (rvatSessionActive or rvatSessionComplete) and iEngineAligned
+    if rvatSessionUsable
+        rvatSessionMs := currentSessionEnd - currentSessionStart
+        rvatCutoff := iEngine.cutoff
+        rvatElapsedMs := iEngine.elapsedMs
+        rvatElapsedMinutes := float(rvatElapsedMs) / 60000.0
+        rvatSessionProgress := rvatSessionMs > 0 ? float(rvatElapsedMs) / float(rvatSessionMs) : na
+        relVolExceeded50InFirst30Min := not na(iEngine.firstThirtyVolume) and not na(iDayVolumeMA) and iDayVolumeMA > 0 and 100.0 * iEngine.firstThirtyVolume / iDayVolumeMA > 50.0
+    if rvatSessionUsable and rvatElapsedMs > 0
+        rvatToday := iEngine.today
+        participationIntensity := iEngine.intensity
+        bool vwapSessionMatches = not na(vwapNativeSession) and vwapNativeSession == currentSessionStart and not na(vwapNativeBarStart) and not na(vwapNativeBarEnd) and vwapNativeBarStart >= currentSessionStart and vwapNativeBarStart < rvatCutoff and vwapNativeBarEnd > vwapNativeBarStart and vwapNativeBarEnd <= currentSessionEnd
+        bool vwapSourceUsable = vwapSessionMatches and vwapNativeReady and not na(vwapNativeValue) and vwapNativeValue > 0 and not na(vwapNativeVolume) and vwapNativeVolume > 0
+        sessionVWAP := vwapSourceUsable ? vwapNativeValue : na
+        sessionDollarVolume := not na(sessionVWAP) ? sessionVWAP * rvatDailyVolume : na
+        float freeFloatMarketCapNow = not na(FSO) and FSO > 0 and rvatDailyClose > 0 ? FSO * rvatDailyClose : na
+        economicThroughput := not na(freeFloatMarketCapNow) and freeFloatMarketCapNow > 0 ? 100.0 * sessionDollarVolume / freeFloatMarketCapNow : na
+        dayRangePosition := rvatDailyHigh > rvatDailyLow ? 100.0 * (rvatDailyClose - rvatDailyLow) / (rvatDailyHigh - rvatDailyLow) : na
+        directionalEfficiency := rvatDailyHigh > rvatDailyLow ? 100.0 * (rvatDailyClose - rvatDailyOpen) / (rvatDailyHigh - rvatDailyLow) : na
+        distanceFromVWAP := not na(sessionVWAP) and sessionVWAP > 0 ? 100.0 * (rvatDailyClose / sessionVWAP - 1.0) : na
+        float priceImpactReturn = price_impact_basis == 'Open to current' ? (rvatDailyOpen > 0 ? 100.0 * (rvatDailyClose / rvatDailyOpen - 1.0) : na) : (rvatPreviousClose > 0 ? 100.0 * (rvatDailyClose / rvatPreviousClose - 1.0) : na)
+        priceImpactPerTurnover := not na(participationIntensity) and participationIntensity > 0 ? priceImpactReturn / participationIntensity : na
+        rvatAverage := iEngine.rvatAverage
+        rvatHistoricalFullDayAvg := iEngine.rvatFullDayAvg
+        rvatHistoricalCompletion := iEngine.rvatCompletion
+        projectionShareCompletion := iEngine.projectionShareCompletion
+        projectionDollarCompletion := iEngine.projectionDollarCompletion
+        projectionShareN := iEngine.projectionSharesN
+        projectionDollarN := iEngine.projectionDollarN
+        rvatRatio := not na(rvatToday) and not na(rvatAverage) and rvatAverage > 0 ? rvatToday / rvatAverage : na
+        rvatValue := rvat_output == 'Difference (+/- %)' ? (not na(rvatRatio) ? 100.0 * (rvatRatio - 1.0) : na) : rvat_output == 'Index (100 = average)' ? (not na(rvatRatio) ? 100.0 * rvatRatio : na) : rvatRatio
+        participationReportedCount := iEngine.reportedCount
+        participationReportedPctile := iEngine.reportedPctile
+        participationVolumeCount := iEngine.volumeCount
+        participationVolumePctile := iEngine.volumePctile
+        bool autoSelectVolume = participation_basis == 'Auto (historical float; volume fallback)' and participationReportedCount < participation_len and participationVolumeCount > participationReportedCount and participationVolumeCount >= participationRequiredSamples
+        participationUsesVolumeProxy := participation_basis == 'Same-time volume only' or autoSelectVolume
+        participationPctile := participationUsesVolumeProxy ? participationVolumePctile : participationReportedPctile
+        adrRangeProgressAvg := iEngine.adrProgressAvg
+        float adrOpenToCurrent = rvatDailyOpen > 0 ? 100.0 * (rvatDailyClose / rvatDailyOpen - 1.0) : na
+        float expectedAdrToTime = not na(adrRangeProgressAvg) and adrRangeProgressAvg > 0 and arp > 0 ? arp * adrRangeProgressAvg : na
+        adrPaceAtTime := not na(adrOpenToCurrent) and not na(expectedAdrToTime) and expectedAdrToTime > 0 ? adrOpenToCurrent / expectedAdrToTime : na
+        rvatSampleCount := iEngine.rvatCount
+        participationSampleCount := participationUsesVolumeProxy ? participationVolumeCount : participationReportedCount
+        adrPaceSampleCount := iEngine.adrCount
+        historyScanned := iEngine.scanned
+        historyBadDaily := iEngine.badDaily
+        historyShortSessions := iEngine.shortSessions
+        historyNoIntrabars := iEngine.noIntrabars
+        historySourceBoundary := iEngine.sourceBoundary
+        historyMalformed := iEngine.malformed
+        historyCumulativeMismatch := iEngine.mismatch
+        historyMissingFloat := iEngine.missingFloat
+        historyNoRange := iEngine.noRange
+        historySparseAccepted := iEngine.sparseAccepted
+        historyZeroWindows := iEngine.zeroWindows
+        rvatOldestStart := iEngine.rvatOldest
+        rvatNewestStart := iEngine.rvatNewest
+        rvatOldestOffset := iEngine.rvatOldestBack
+        participationOldestStart := iEngine.reportedOldest
+        participationNewestStart := iEngine.reportedNewest
+        participationOldestOffset := iEngine.reportedOldestBack
+        participationVolumeOldestStart := iEngine.volumeOldest
+        participationVolumeNewestStart := iEngine.volumeNewest
+        participationVolumeOldestOffset := iEngine.volumeOldestBack
+        adrOldestStart := iEngine.adrOldest
+        adrNewestStart := iEngine.adrNewest
+        adrOldestOffset := iEngine.adrOldestBack
+// ============================================================================
+// MULTI-SESSION ENGINE: 2D+, W, M and their TradingView-supported multiples.
+// The original 1D engine above is left in place. This branch only runs on >1D.
+// ============================================================================
+int hScanned = 0
+int hBadPeriod = 0
+int hNoPath = 0
+int hClipped = 0
+int hBadPath = 0
+int hBadDays = 0
+int hTooShort = 0
+int hMissingFloat = 0
+int hNoRange = 0
+int hShareProjectionCount = 0
+int hDollarProjectionCount = 0
+float hShareAverage = na
+float hShareCompletion = na
+float hDollarAverage = na
+float hDollarCompletion = na
+float hProjectedVolume = na
+float hProjectedDollarVolume = na
+float hCurrentDollarVolume = na
+float hPosition = na
+float hBlockLo = na
+float hBlockHi = na
+float hDayFraction = na
+int hCutoff = na
+bool hComplete = tfHigher and not na(hPeriodEnd) and timenow >= hPeriodEnd
+bool hCalendarMatches = not na(hCalendarKey) and hCalendarKey == hPeriodStart and hCalendarReady and not na(hDayCount) and hDayCount > 0
+bool hPeriodValid = tfHigher and not na(hPeriodStart) and not na(hPeriodEnd) and hPeriodEnd > hPeriodStart and not na(hPeriodVolume) and hPeriodVolume >= 0
+bool hUsable = hPeriodValid and timenow > hPeriodStart
+bool hPathCompatible = rvat_mode == 'Cumulative from open' or hSamplingSeconds <= float(rvat_block_min * 60)
+string hStatusText = ''
+string hProjectionTooltip = ''
+string hDollarProjectionTooltip = ''
+string hVwapTooltip = ''
+
+if barstate.islast and tfHigher
+    // Current OHLCV always comes from the CHART PERIOD, never the last daily bar.
+    if hUsable
+        hCutoff := math.min(timenow, hPeriodEnd)
+        if hCalendarMatches and hCalendarDayEnd > hCalendarDayStart
+            hDayFraction := math.min(math.max(float(timenow - hCalendarDayStart) / float(hCalendarDayEnd - hCalendarDayStart), 0.0), 1.0)
+            hPosition := float(hDayCount - 1) + hDayFraction
+            float elapsedSeconds = float(hCalendarDayEnd - hCalendarDayStart) / 1000.0 * hDayFraction
+            float durationSeconds = float(hCalendarDayEnd - hCalendarDayStart) / 1000.0
+            float blockSeconds = float(rvat_block_min * 60)
+            float insideSeconds = math.min(elapsedSeconds, math.max(durationSeconds - 0.001, 0.0))
+            float blockStartSeconds = math.floor(math.max(insideSeconds, 0.0) / blockSeconds) * blockSeconds
+            hBlockLo := float(hDayCount - 1) + blockStartSeconds / durationSeconds
+            hBlockHi := hPosition
+        // At the period close historical comparisons use each previous FULL period.
+        if hComplete and hCalendarMatches
+            hPosition := float(hDayCount)
+        if not na(FSO) and FSO > 0
+            participationIntensity := 100.0 * hPeriodVolume / FSO
+        dayRangePosition := hPeriodHigh > hPeriodLow ? 100.0 * (hPeriodClose - hPeriodLow) / (hPeriodHigh - hPeriodLow) : na
+        directionalEfficiency := hPeriodHigh > hPeriodLow ? 100.0 * (hPeriodClose - hPeriodOpen) / (hPeriodHigh - hPeriodLow) : na
+        float hReturn = price_impact_basis == 'Open to current' ? (hPeriodOpen > 0 ? 100.0 * (hPeriodClose / hPeriodOpen - 1.0) : na) : (hPreviousClose > 0 ? 100.0 * (hPeriodClose / hPreviousClose - 1.0) : na)
+        priceImpactPerTurnover := not na(participationIntensity) and participationIntensity > 0 ? hReturn / participationIntensity : na
+        bool hvMatches = not na(hVwapKey) and hVwapKey == hPeriodStart and not na(hVwapStart) and not na(hVwapEnd) and hVwapStart >= hPeriodStart and hVwapStart < hCutoff and hVwapEnd <= hPeriodEnd
+        bool hvUsable = hvMatches and hVwapReady and not na(hVwap) and hVwap > 0 and not na(hVwapVolume) and hVwapVolume > 0
+        sessionVWAP := hvUsable ? hVwap : na
+        distanceFromVWAP := not na(sessionVWAP) ? 100.0 * (hPeriodClose / sessionVWAP - 1.0) : na
+        sessionDollarVolume := not na(sessionVWAP) ? sessionVWAP * hPeriodVolume : na
+        hCurrentDollarVolume := sessionDollarVolume
+        float hFloatCapital = not na(FSO) and FSO > 0 ? FSO * hPeriodClose : na
+        economicThroughput := not na(hFloatCapital) and hFloatCapital > 0 and not na(sessionDollarVolume) ? 100.0 * sessionDollarVolume / hFloatCapital : na
+        if rvat_mode == 'Cumulative from open'
+            rvatToday := hPeriodVolume
+        else if hPathCompatible and hCalendarMatches and not na(hBlockLo)
+            int currentStatus = f_hStatus(hVols, hStarts, hEnds, hCoordsA, hCoordsB, hNativeVols, hReady, hDayNumbers, hPeriodStart, hPeriodEnd, hDayCount, hCalendarReady)
+            if currentStatus == 0
+                // Use a single source for per-block numerator and its denominator.
+                // Scale the CURRENT block by the observed period-volume coverage, not
+                // by pretending unmatched daily-feed volume traded in the latest block.
+                float rawThroughNow = array.sum(hVols)
+                float rawBlock = f_hWindow(hVols, hCoordsA, hCoordsB, hBlockLo, hBlockHi)
+                // Do not fractionate an already-developing source bar a second time.
+                int curN = array.size(hVols)
+                if curN > 0
+                    int lastJ = curN - 1
+                    int lastStart = array.get(hStarts, lastJ)
+                    int lastEnd = array.get(hEnds, lastJ)
+                    float lastA = array.get(hCoordsA, lastJ)
+                    float lastB = array.get(hCoordsB, lastJ)
+                    if lastStart < hCutoff and lastEnd > hCutoff and lastB > lastA and lastA >= hBlockLo
+                        float fractionAlreadyCounted = math.max(0.0, math.min(lastB, hBlockHi) - math.max(lastA, hBlockLo)) / (lastB - lastA)
+                        rawBlock += array.get(hVols, lastJ) * (1.0 - fractionAlreadyCounted)
+                rvatToday := not na(rawThroughNow) and rawThroughNow > 0 and not na(rawBlock) ? hPeriodVolume * math.min(math.max(rawBlock / rawThroughNow, 0.0), 1.0) : na
+
+        float sumRvat = 0.0
+        float sumRvatFull = 0.0
+        float belowFloat = 0.0
+        float equalFloat = 0.0
+        float belowVolume = 0.0
+        float equalVolume = 0.0
+        float sumRangeProgress = 0.0
+        float sharePartSum = 0.0
+        float shareFullSum = 0.0
+        float dollarPartSum = 0.0
+        float dollarFullSum = 0.0
+        int scanTo = math.min(hScanLimit, bar_index)
+        bool canCompare = hComplete or (hCalendarMatches and not na(hPosition) and hPosition > 0)
+        if canCompare and scanTo > 0
+            for i = 1 to scanTo
+                bool wantRvat = rvatSampleCount < rvat_len and hPathCompatible
+                bool wantFloat = participationCollectReported and participationReportedCount < participation_len and not na(participationIntensity)
+                bool wantVolume = participationCollectVolume and participationVolumeCount < participation_len
+                bool wantRange = adrPaceSampleCount < adr_pace_len
+                bool wantShareProjection = hShareProjectionCount < len
+                bool wantDollarProjection = hDollarProjectionCount < dollar_vol_len
+                if not wantRvat and not wantFloat and not wantVolume and not wantRange and not wantShareProjection and not wantDollarProjection
+                    break
+                int ps = hPeriodStart[i]
+                int pe = hPeriodEnd[i]
+                if na(ps)
+                    break
+                hScanned := i
+                float pv = hPeriodVolume[i]
+                bool periodOK = not na(pe) and pe > ps and pe <= hPeriodStart and not na(pv) and pv >= 0
+                if not periodOK
+                    hBadPeriod += 1
+                    continue
+                int days = hDayCount[i]
+                bool dayHistoryOK = hCalendarReady[i] and hCalendarKey[i] == ps and not na(days) and days > 0
+                // Do not pad a short month/holiday week with zero future sessions.
+                bool enoughDays = hComplete or (dayHistoryOK and float(days) + 0.0000001 >= hPosition)
+                if not enoughDays
+                    hTooShort += 1
+                    continue
+                bool zeroPeriod = pv == 0
+                bool needPath = not hComplete or (wantRvat and rvat_mode == 'Per-block') or wantDollarProjection
+                int status = needPath and not zeroPeriod ? f_hStatus(hVols[i], hStarts[i], hEnds[i], hCoordsA[i], hCoordsB[i], hNativeVols[i], hReady[i], hDayNumbers[i], ps, pe, days, dayHistoryOK) : 0
+                bool pathOK = status == 0
+                if status == 1
+                    hNoPath += 1
+                else if status == 2
+                    hClipped += 1
+                else if status == 3 or status == 4
+                    hBadPath += 1
+                else if status == 5
+                    hBadDays += 1
+                float fullRaw = pathOK and not zeroPeriod and needPath ? array.sum(hVols[i]) : na
+                float target = hComplete ? float(days) : hPosition
+                float rawPart = pathOK and not zeroPeriod and not hComplete ? f_hWindow(hVols[i], hCoordsA[i], hCoordsB[i], 0.0, target) : na
+                float cumulative = zeroPeriod ? 0.0 : hComplete ? pv : not na(fullRaw) and fullRaw > 0 and not na(rawPart) ? pv * math.min(math.max(rawPart / fullRaw, 0.0), 1.0) : na
+                if wantRvat
+                    float observation = na
+                    if rvat_mode == 'Cumulative from open'
+                        observation := cumulative
+                    else if pathOK and dayHistoryOK
+                        // Completed periods compare the LAST block of their LAST session.
+                        // Developing periods compare the same session ordinal/block.
+                        float lastDaySeconds = float(hCalendarDayEnd[i] - hCalendarDayStart[i]) / 1000.0
+                        float lastBlockSeconds = lastDaySeconds > 0 ? math.floor(math.max(lastDaySeconds - 0.001, 0.0) / float(rvat_block_min * 60)) * float(rvat_block_min * 60) : na
+                        float lo = hComplete ? (lastDaySeconds > 0 ? float(days - 1) + lastBlockSeconds / lastDaySeconds : na) : hBlockLo
+                        float hi = hComplete ? float(days) : hBlockHi
+                        float raw = zeroPeriod ? 0.0 : f_hWindow(hVols[i], hCoordsA[i], hCoordsB[i], lo, hi)
+                        observation := zeroPeriod ? 0.0 : not na(raw) and not na(fullRaw) and fullRaw > 0 ? pv * math.min(math.max(raw / fullRaw, 0.0), 1.0) : na
+                    if not na(observation)
+                        sumRvat += observation
+                        sumRvatFull += pv
+                        rvatSampleCount += 1
+                        rvatOldestStart := ps
+                        rvatOldestOffset := i
+                        if na(rvatNewestStart)
+                            rvatNewestStart := ps
+                if wantFloat and not na(cumulative)
+                    // FY snapshot is the provider value on the historical chart period.
+                    // This is not a daily or publication-time ownership reconstruction.
+                    float historicalFloat = floatFYSeries[i]
+                    if not na(historicalFloat) and historicalFloat > 0
+                        float ft = 100.0 * cumulative / historicalFloat
+                        float tol = math.max(math.abs(participationIntensity), 1.0) * 0.0000001
+                        if ft < participationIntensity - tol
+                            belowFloat += 1.0
+                        else if math.abs(ft - participationIntensity) <= tol
+                            equalFloat += 1.0
+                        participationReportedCount += 1
+                        participationOldestStart := ps
+                        participationOldestOffset := i
+                        if na(participationNewestStart)
+                            participationNewestStart := ps
+                    else
+                        hMissingFloat += 1
+                if wantVolume and not na(cumulative)
+                    float tol = math.max(math.abs(hPeriodVolume), 1.0) * 0.0000001
+                    if cumulative < hPeriodVolume - tol
+                        belowVolume += 1.0
+                    else if math.abs(cumulative - hPeriodVolume) <= tol
+                        equalVolume += 1.0
+                    participationVolumeCount += 1
+                    participationVolumeOldestStart := ps
+                    participationVolumeOldestOffset := i
+                    if na(participationVolumeNewestStart)
+                        participationVolumeNewestStart := ps
+                if wantRange and not zeroPeriod
+                    float progress = na
+                    if hComplete
+                        progress := 1.0
+                    else if pathOK
+                        [hh, ll] = f_hHighLow(hHighs[i], hLows[i], hCoordsB[i], target)
+                        float fullHigh = array.max(hHighs[i])
+                        float fullLow = array.min(hLows[i])
+                        if not na(hh) and not na(ll) and not na(fullHigh) and not na(fullLow) and fullHigh > fullLow
+                            progress := math.min(math.max((hh - ll) / (fullHigh - fullLow), 0.0), 1.0)
+                    if not na(progress) and progress > 0
+                        sumRangeProgress += progress
+                        adrPaceSampleCount += 1
+                        adrOldestStart := ps
+                        adrOldestOffset := i
+                        if na(adrNewestStart)
+                            adrNewestStart := ps
+                    else
+                        hNoRange += 1
+                if wantShareProjection and not na(cumulative)
+                    sharePartSum += cumulative
+                    shareFullSum += pv
+                    hShareProjectionCount += 1
+                // Dollar averages/projections use estimated notional consistently:
+                // intrabar HLC3 VWAP * the historical period-feed volume.
+                if wantDollarProjection and pathOK
+                    float fullDollar = na
+                    float partDollar = na
+                    if zeroPeriod
+                        fullDollar := 0.0
+                        partDollar := 0.0
+                    else if not na(fullRaw) and fullRaw > 0
+                        float rawDollarFull = array.sum(hPVs[i])
+                        float rawDollarPart = hComplete ? rawDollarFull : f_hWindow(hPVs[i], hCoordsA[i], hCoordsB[i], 0.0, target)
+                        if not na(rawDollarFull) and rawDollarFull > 0 and not na(rawDollarPart)
+                            fullDollar := rawDollarFull * pv / fullRaw
+                            partDollar := fullDollar * math.min(math.max(rawDollarPart / rawDollarFull, 0.0), 1.0)
+                    if not na(fullDollar) and not na(partDollar)
+                        dollarFullSum += fullDollar
+                        dollarPartSum += partDollar
+                        hDollarProjectionCount += 1
+
+        if rvatSampleCount >= hAverageFloor
+            rvatAverage := sumRvat / rvatSampleCount
+            rvatHistoricalFullDayAvg := sumRvatFull / rvatSampleCount
+            rvatHistoricalCompletion := rvatHistoricalFullDayAvg > 0 ? rvatAverage / rvatHistoricalFullDayAvg : na
+        rvatRatio := not na(rvatToday) and not na(rvatAverage) and rvatAverage > 0 ? rvatToday / rvatAverage : na
+        rvatValue := rvat_output == 'Difference (+/- %)' ? (not na(rvatRatio) ? 100.0 * (rvatRatio - 1.0) : na) : rvat_output == 'Index (100 = average)' ? (not na(rvatRatio) ? 100.0 * rvatRatio : na) : rvatRatio
+        participationReportedPctile := participationReportedCount >= hRankFloor ? 100.0 * (belowFloat + 0.5 * equalFloat) / participationReportedCount : na
+        participationVolumePctile := participationVolumeCount >= hRankFloor ? 100.0 * (belowVolume + 0.5 * equalVolume) / participationVolumeCount : na
+        bool hAutoProxy = participation_basis == 'Auto (historical float; volume fallback)' and participationReportedCount < participation_len and participationVolumeCount > participationReportedCount and participationVolumeCount >= hRankFloor
+        participationUsesVolumeProxy := participation_basis == 'Same-time volume only' or hAutoProxy
+        participationPctile := participationUsesVolumeProxy ? participationVolumePctile : participationReportedPctile
+        participationSampleCount := participationUsesVolumeProxy ? participationVolumeCount : participationReportedCount
+        adrRangeProgressAvg := adrPaceSampleCount >= hAverageFloor ? sumRangeProgress / adrPaceSampleCount : na
+        float hDirectional = hPeriodOpen > 0 ? 100.0 * (hPeriodClose / hPeriodOpen - 1.0) : na
+        // The denominator is the average range of CHART PERIODS (weekly/monthly/etc.).
+        adrPaceAtTime := not na(adrRangeProgressAvg) and adrRangeProgressAvg > 0 and arp > 0 ? hDirectional / (arp * adrRangeProgressAvg) : na
+        if hShareProjectionCount >= hAverageFloor and shareFullSum > 0
+            hShareAverage := shareFullSum / hShareProjectionCount
+            hShareCompletion := sharePartSum / shareFullSum
+        if hDollarProjectionCount >= hAverageFloor and dollarFullSum > 0
+            hDollarAverage := dollarFullSum / hDollarProjectionCount
+            hDollarCompletion := dollarPartSum / dollarFullSum
+        hProjectedVolume := hComplete ? hPeriodVolume : not na(hShareCompletion) and hShareCompletion > 0 ? hPeriodVolume / hShareCompletion : na
+        hProjectedDollarVolume := hComplete ? hCurrentDollarVolume : not na(hCurrentDollarVolume) and not na(hDollarCompletion) and hDollarCompletion > 0 ? hCurrentDollarVolume / hDollarCompletion : na
+
+    // Existing rendering variables are populated with CURRENT-PERIOD values only.
+    // The original daily engine did not execute on this chart; its history remains separate.
+    rvatDailyOpen := hPeriodOpen
+    rvatDailyHigh := hPeriodHigh
+    rvatDailyLow := hPeriodLow
+    rvatDailyClose := hPeriodClose
+    rvatDailyVolume := hPeriodVolume
+    rvatCutoff := hCutoff
+    currentSessionStart := hPeriodStart
+    currentSessionEnd := hPeriodEnd
+    rvatSessionUsable := hUsable
+    advancedDailyReady := hPeriodValid
+    rvatElapsedMinutes := not na(hCutoff) ? float(hCutoff - hPeriodStart) / 60000.0 : na
+    rvatSessionProgress := hComplete ? 1.0 : na
+    rvatRequiredSamples := hAverageFloor
+    participationRequiredSamples := hRankFloor
+    adrRequiredSamples := hAverageFloor
+    historyScanned := hScanned
+    historyBadDaily := hBadPeriod
+    historyShortSessions := hTooShort
+    historyNoIntrabars := hNoPath
+    historySourceBoundary := hClipped
+    historyMalformed := hBadPath
+    historyMissingFloat := hMissingFloat
+    historyNoRange := hNoRange
+    // Use the same aliases for the audited native VWAP display, not the daily anchor.
+    vwapNativeValue := hVwap
+    vwapNativeVolume := hVwapVolume
+    vwapNativeSession := hVwapKey
+    vwapNativeBarStart := hVwapStart
+    vwapNativeBarEnd := hVwapEnd
+    vwapNativeClose := hVwapClose
+    vwapNativeReady := hVwapReady
+
+rvatLabel = rvat_mode == 'Cumulative from open' ? 'Rel. Vol@Time (cumul)' : 'Rel. Vol@Time (' + rvat_block + ' blk)'
+rvatText = rvat_output == 'Difference (+/- %)' ? f_signedPct(rvatValue, '0') : rvat_output == 'Index (100 = average)' ? (na(rvatValue) ? '-' : str.tostring(rvatValue, '0') + '%') : (na(rvatValue) ? '-' : str.tostring(rvatValue, '0.00') + 'x')
+string rvatDisplayText = rvatText + (not na(rvatValue) and rvatSampleCount < rvat_len ? ' (n=' + str.tostring(rvatSampleCount) + ')' : '')
+string adrPaceDisplayText = not na(adrPaceAtTime) ? f_signedNumber(adrPaceAtTime, '0.00', 'x ADR') + (adrPaceSampleCount < adr_pace_len ? ' (n=' + str.tostring(adrPaceSampleCount) + ')' : '') : '-'
+string sameTimeWindowText = advancedDailyReady and not na(rvatCutoff) ? str.format_time(currentSessionStart, 'HH:mm', syminfo.timezone) + '-' + str.format_time(rvatCutoff, 'HH:mm', syminfo.timezone) + ' exchange time; ' + str.tostring(rvatElapsedMinutes, '0.0') + ' minutes / ' + str.tostring(100.0 * rvatSessionProgress, '0.0') + '% of session' : '-'
+string completionText = not na(rvatHistoricalCompletion) ? str.tostring(100.0 * rvatHistoricalCompletion, '0.0') + '%' : '-'
+string completionDescription = rvat_mode == 'Cumulative from open' ? 'Historical volume normally completed by this point' : 'Historical full-day volume represented by this matching block'
+string adrProgressText = not na(adrRangeProgressAvg) ? str.tostring(100.0 * adrRangeProgressAvg, '0.0') + '%' : '-'
+string historyDiagnostics = 'Inspected ' + str.tostring(historyScanned) + '/' + str.tostring(sameTimeScanLimit) + ' prior bars while filling independent samples. Exclusions: invalid daily/session=' + str.tostring(historyBadDaily) + ', ended before target=' + str.tostring(historyShortSessions) + ', no intrabars=' + str.tostring(historyNoIntrabars) + ', first/clipped source day=' + str.tostring(historySourceBoundary) + ', malformed arrays=' + str.tostring(historyMalformed) + ', source-volume mismatch=' + str.tostring(historyCumulativeMismatch) + ', missing historical float=' + str.tostring(historyMissingFloat) + ', no usable range yet=' + str.tostring(historyNoRange) + '. Valid sparse sessions accepted=' + str.tostring(historySparseAccepted) + '; valid zero same-time windows=' + str.tostring(historyZeroWindows) + '.'
+string rvatSpanText = not na(rvatOldestStart) ? str.format_time(rvatOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(rvatNewestStart, 'yyyy-MM-dd', syminfo.timezone) + '; oldest observation ' + str.tostring(rvatOldestOffset) + ' daily bars back' : 'no valid observations'
+string participationSpanText = not na(participationOldestStart) ? str.format_time(participationOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(participationNewestStart, 'yyyy-MM-dd', syminfo.timezone) + '; oldest observation ' + str.tostring(participationOldestOffset) + ' daily bars back' : 'no valid observations'
+string participationVolumeSpanText = not na(participationVolumeOldestStart) ? str.format_time(participationVolumeOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(participationVolumeNewestStart, 'yyyy-MM-dd', syminfo.timezone) + '; oldest observation ' + str.tostring(participationVolumeOldestOffset) + ' daily bars back' : 'no valid observations'
+string participationDisplayedSpanText = participationUsesVolumeProxy ? participationVolumeSpanText : participationSpanText
+string participationRowLabel = participationUsesVolumeProxy ? 'Volume Pctl (' + str.tostring(participation_len) + ') [proxy]' : 'Part. Pctl (' + str.tostring(participation_len) + ') [FY est.]'
+string adrSpanText = not na(adrOldestStart) ? str.format_time(adrOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(adrNewestStart, 'yyyy-MM-dd', syminfo.timezone) + '; oldest observation ' + str.tostring(adrOldestOffset) + ' daily bars back' : 'no valid observations'
+string commonDataStatus = not (tfOneDay or tfIntraday) ? 'Advanced same-time metrics require a 1D chart.' : not advancedDailyReady ? 'Regular-session daily volume or session bounds unavailable.' : tfIntraday and (rvatSessionActive or rvatSessionComplete) and not iEngineAligned ? 'Requested 1D context is not aligned with the current daily session; no reading is published.' : not rvatSessionUsable or rvatElapsedMs <= 0 ? 'No usable regular-session time has elapsed.' : ''
+string rvatDataStatus = commonDataStatus != '' ? commonDataStatus : not rvatResolutionCompatible ? 'Sampling resolution exceeds the per-block size.' : na(rvatToday) ? 'Current block prefix is unavailable or failed validation.' : rvatSampleCount < rvatRequiredSamples ? 'Fewer than 21 valid historical sessions; no reading is published.' : na(rvatAverage) ? 'Historical same-time average is unavailable or failed validation.' : rvatAverage == 0 ? 'Historical same-time mean is zero; a finite RVOL ratio is undefined.' : rvatSampleCount < rvat_len ? 'Adaptive partial sample; using all available valid sessions up to the selected maximum.' : 'Selected maximum sample is complete.'
+string participationDataStatus = commonDataStatus
+if commonDataStatus == ''
+    if participationUsesVolumeProxy
+        participationDataStatus := participationSampleCount < participationRequiredSamples ? 'Fewer than 63 valid same-time volumes; no percentile is published.' : participationSampleCount < participation_len ? 'Adaptive partial VOLUME-PROXY sample; using all available valid observations up to the selected maximum.' : participation_basis == 'Same-time volume only' ? 'Selected maximum same-time VOLUME sample; volume-only mode selected.' : 'Selected maximum VOLUME-PROXY sample selected because reported-float history is incomplete.'
+    else
+        participationDataStatus := na(participationIntensity) ? 'Current float is unavailable; reported-float turnover cannot be ranked.' : participationSampleCount < participationRequiredSamples ? 'Fewer than 63 valid reported-float observations; no percentile is published.' : participationSampleCount < participation_len ? 'Adaptive partial reported-float sample; missing float is not backfilled.' : 'Selected maximum reported-float sample; original turnover percentile is used.'
+string adrDataStatus = commonDataStatus != '' ? commonDataStatus : adrPaceSampleCount < adrRequiredSamples ? 'Fewer than 21 valid range-development observations; no reading is published.' : adrPaceSampleCount < adr_pace_len ? 'Adaptive partial sample; using all available valid observations up to the selected maximum.' : 'Selected maximum sample is complete.'
+rvatTooltip = 'Status: ' + rvatDataStatus + '\nCurrent selected-window volume: ' + f_compactNumber(rvatToday) + '. Historical same-time average: ' + f_compactNumber(rvatAverage) + '. Matched-sample full-day average: ' + f_compactNumber(rvatHistoricalFullDayAvg) + '. ' + completionDescription + ': ' + completionText + '. RVOL ratio: ' + (na(rvatRatio) ? '-' : str.tostring(rvatRatio, '0.00') + 'x') + '. Window: ' + sameTimeWindowText + '.\nUsable sessions: ' + str.tostring(rvatSampleCount) + '/' + str.tostring(rvat_len) + ' max (minimum ' + str.tostring(rvatRequiredSamples) + '). Sample: ' + rvatSpanText + '.\n' + historyDiagnostics + '\nHistorical intraday completion fractions are rescaled to that session’s daily volume, as in the attached version; this is an estimate, not an exact transaction-time reconstruction. Sampling: ' + rvat_intratf + ' min; request limit 100,000 intrabars.'
+string participationMethodText = participationUsesVolumeProxy ? 'Displayed basis: cumulative regular-session VOLUME percentile [proxy], at the identical elapsed session time. This is a separate measure, NOT a reconstructed historical-float turnover percentile.' : 'Displayed basis: CURRENT volume / latest float ranked against historical same-time volume / reported FY float. The historical annual series is NOT publication-time-aligned, so this is an approximate live-monitoring metric, NOT a point-in-time historical backtest signal.'
+string participationReportedAuditText = participationCollectReported ? 'Reported-FY-float sample: ' + str.tostring(participationReportedCount) + '/' + str.tostring(participation_len) + '; percentile ' + (na(participationReportedPctile) ? '-' : str.tostring(participationReportedPctile, '0.0') + 'th') + '. Sample: ' + participationSpanText + '.' : 'Reported-FY-float ranking is not collected in volume-only mode.'
+string participationVolumeAuditText = participationCollectVolume ? 'Separate same-time volume sample: ' + str.tostring(participationVolumeCount) + '/' + str.tostring(participation_len) + '; percentile ' + (na(participationVolumePctile) ? '-' : str.tostring(participationVolumePctile, '0.0') + 'th') + '. Sample: ' + participationVolumeSpanText + '.' : 'Volume fallback is disabled in reported-historical-float-only mode.'
+participationTooltip = 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2 (preserved 1D path)\nStatus: ' + participationDataStatus + '\n' + participationMethodText + '\nSetting: ' + participation_basis + '. Current actual float turnover: ' + (na(participationIntensity) ? '-' : str.tostring(participationIntensity, '0.00') + '%') + '. Window: ' + sameTimeWindowText + '.\nDisplayed sample: ' + str.tostring(participationSampleCount) + '/' + str.tostring(participation_len) + ' max (minimum ' + str.tostring(participationRequiredSamples) + '). Sample: ' + participationDisplayedSpanText + '.\n' + participationReportedAuditText + '\n' + participationVolumeAuditText + '\n' + historyDiagnostics + '\nReported float is annual and forward-filled, not a verified daily ownership record or publication-time history. No current-float backfill and no mixed float bases. The volume proxy uses the provider volume series and does not normalise historical changes in free float or shares outstanding. Current Float Turnover, RVOL, ADR and VWAP calculations are unchanged.'
+adrPaceTooltip = 'Status: ' + adrDataStatus + '\nSigned open-to-current move / (ADR% * historical range-development fraction). Historical range-development factor: ' + adrProgressText + '. Window: ' + sameTimeWindowText + '.\nUsable sessions: ' + str.tostring(adrPaceSampleCount) + '/' + str.tostring(adr_pace_len) + ' max (minimum ' + str.tostring(adrRequiredSamples) + '). Sample: ' + adrSpanText + '.\n' + historyDiagnostics + '\nAt the close the factor is 100%, so this remains open-to-close % move / ADR%.'
+// Expose the exact numerator and denominator used by the distance row. The source-volume
+// ratio is diagnostic only: it is NOT a price multiplier or a reason to overwrite VWAP.
+float vwapSourceVolumeRatio = rvatDailyVolume > 0 and not na(vwapNativeVolume) ? 100.0 * vwapNativeVolume / rvatDailyVolume : na
+string vwapSourceMinuteText = not na(vwapNativeBarStart) and not na(vwapNativeBarEnd) ? str.format_time(vwapNativeBarStart, 'yyyy-MM-dd HH:mm', syminfo.timezone) + '-' + str.format_time(vwapNativeBarEnd, 'HH:mm', syminfo.timezone) : '-'
+string vwapDataStatus = commonDataStatus != '' ? commonDataStatus : na(vwapNativeSession) ? 'One-minute source unavailable.' : vwapNativeSession != currentSessionStart ? 'Source belongs to another session; no substitute VWAP is published.' : not vwapNativeReady ? 'Initial/clipped source session or invalid source data; no substitute VWAP is published.' : na(vwapNativeVolume) or vwapNativeVolume <= 0 ? 'No usable one-minute volume in this session.' : na(sessionVWAP) ? 'One-minute VWAP or source timestamps failed validation.' : 'Native one-minute regular-session HLC3 VWAP; source-feed estimate.'
+string vwapDistanceTooltip = 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2 (preserved 1D path)\nStatus: ' + vwapDataStatus + '\nPrice used: ' + (na(rvatDailyClose) ? '-' : str.tostring(rvatDailyClose, '0.0000')) + '. Session VWAP used: ' + (na(sessionVWAP) ? '-' : str.tostring(sessionVWAP, '0.0000')) + '. Distance = 100 * (price / VWAP - 1): ' + f_signedPct(distanceFromVWAP, '0.0000') + '.\nSource: ' + regularTicker + '; 1 minute; HLC3; reset each regular session. Latest source minute: ' + vwapSourceMinuteText + ' exchange time; native close: ' + (na(vwapNativeClose) ? '-' : str.tostring(vwapNativeClose, '0.0000')) + '.\nSource cumulative volume: ' + f_compactNumber(vwapNativeVolume) + '; daily-feed volume: ' + f_compactNumber(rvatDailyVolume) + '; source/daily ratio: ' + (na(vwapSourceVolumeRatio) ? '-' : str.tostring(vwapSourceVolumeRatio, '0.00') + '%') + '. Different feeds can cover different trades. No residual volume is priced at the current quote.\nCompare with a Session-anchored HLC3 VWAP on the same symbol, 1-minute calculation and regular-hours session. Developing prices/volume update when TradingView supplies new data; feed delays/revisions remain possible.'
+string economicThroughputTooltip = 'Estimated regular-session notional = native 1-minute regular-session HLC3 VWAP * daily-feed volume. Economic Throughput = 100 * estimated notional / (current float * current price). This assumes the intraday average price represents daily-feed trades; it is not exact consolidated notional or net inflow. VWAP used: ' + (na(sessionVWAP) ? '-' : str.tostring(sessionVWAP, '0.0000')) + '. No residual volume is priced at the current quote.'
+// Higher-period risk uses actual CHART-PERIOD returns, excluding the developing
+// candle. It is not daily VaR multiplied by sqrt(days). The 1D path is untouched.
+if barstate.islast and tfHigher
+    array<float> hRiskReturns = array.new_float(0)
+    int riskFirst = 1  // completed periods strictly PRIOR to the current chart period
+    int riskLast = math.min(2 * var_len, bar_index - 1)
+    if riskLast >= riskFirst
+        for j = riskFirst to riskLast
+            if array.size(hRiskReturns) >= var_len
+                break
+            float c1 = hPeriodClose[j]
+            float c0 = hPeriodClose[j + 1]
+            if not na(c1) and not na(c0) and c0 > 0 and c1 > 0
+                float r = c1 / c0 - 1.0
+                array.push(hRiskReturns, in_percent ? r * 100.0 : r)
+    varMinimumSamples := hRiskFloor
+    varSampleCount := array.size(hRiskReturns)
+    varSampleReady := varSampleCount >= varMinimumSamples and percentile >= 0 and percentile <= 100
+    VaR := na
+    VaR5 := na
+    ES5 := na
+    std_dev_returns := na
+    VaR_plus_3sigma := na
+    if varSampleReady
+        array.sort(hRiskReturns, order.ascending)
+        VaR := array.percentile_linear_interpolation(hRiskReturns, percentile)
+        VaR5 := array.percentile_linear_interpolation(hRiskReturns, 5.0)
+        std_dev_returns := array.stdev(hRiskReturns, true)
+        VaR_plus_3sigma := VaR - 3.0 * std_dev_returns
+        int tailCount = math.max(1, int(math.ceil(varSampleCount * 0.05)))
+        float tailTotal = 0.0
+        for j = 0 to tailCount - 1
+            tailTotal += array.get(hRiskReturns, j)
+        ES5 := tailTotal / tailCount
+    varSampleSuffix := varSampleReady and varSampleCount < var_len ? ' (n=' + str.tostring(varSampleCount) + ')' : ''
+    varTooltip := 'Signed prior completed-' + periodTag + ' return quantile at ' + str.tostring(percentile) + '%, not a rescaled daily VaR. Current period excluded. n=' + str.tostring(varSampleCount) + ', minimum=' + str.tostring(varMinimumSamples) + '. Thin-tail estimates remain unstable.'
+    var5Tooltip := 'Signed prior completed-' + periodTag + ' empirical 5% return quantile; n=' + str.tostring(varSampleCount) + '.'
+    esTooltip := 'Average of worst ceil(5% × n) prior completed-' + periodTag + ' returns; n=' + str.tostring(varSampleCount) + '. Thin sample caveat applies.'
+    tailQuality := 'Completed ' + periodTag + ' returns=' + str.tostring(varSampleCount) + '; 1% expected tail observations≈' + str.tostring(varSampleCount * 0.01, '0.0') + '.'
+    stressTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nExtreme Stress = signed ' + periodTag + ' empirical return quantile - 3 * population standard deviation of the SAME completed-period sample. Current n=' + str.tostring(varSampleCount) + '; minimum=' + str.tostring(varMinimumSamples) + '. This is a descriptive severity overlay, not a conventional confidence level, Expected Shortfall or maximum possible loss.'
+
+// Re-label the data actually used; never show a daily statistic under a weekly name.
+if tfHigher
+    string hDates = not na(hPeriodStart) ? str.format_time(hPeriodStart, 'yyyy-MM-dd HH:mm', syminfo.timezone) + ' to ' + (not na(hCutoff) ? str.format_time(hCutoff, 'yyyy-MM-dd HH:mm', syminfo.timezone) : '-') : '-'
+    string hTradingPoint = hComplete ? 'completed ' + periodTag + ' candle; full-period versus full-period' : not na(hPosition) ? str.tostring(hPosition, '0.000') + ' trading sessions elapsed (session ordinal + proportional within-session time)' : 'current trading-session position unavailable'
+    sameTimeWindowText := hDates + ' exchange time; ' + hTradingPoint
+    completionText := not na(rvatHistoricalCompletion) ? str.tostring(100.0 * rvatHistoricalCompletion, '0.0') + '%' : '-'
+    adrProgressText := not na(adrRangeProgressAvg) ? str.tostring(100.0 * adrRangeProgressAvg, '0.0') + '%' : '-'
+    rvatLabel := 'Rel. Vol@Time (' + periodTag + (rvat_mode == 'Cumulative from open' ? ' cumul)' : ' ' + rvat_block + ' blk)')
+    rvatDisplayText := rvatText + (not na(rvatValue) ? ' (n=' + str.tostring(rvatSampleCount) + ')' : '')
+    adrPaceDisplayText := not na(adrPaceAtTime) ? f_signedNumber(adrPaceAtTime, '0.00', 'x ' + rangeTag) + ' (n=' + str.tostring(adrPaceSampleCount) + ')' : '-'
+    participationRowLabel := (participationUsesVolumeProxy ? 'Volume Pctl (' : 'Part. Pctl (') + str.tostring(participation_len) + ' x ' + periodTag + ')' + (participationUsesVolumeProxy ? ' [proxy]' : ' [FY est.]')
+    commonDataStatus := not hPeriodValid ? 'Native regular-hours chart-period data unavailable.' : not hUsable ? 'Current chart period has not started.' : not hComplete and not hCalendarMatches ? 'Daily calendar does not establish a complete current period/session index.' : ''
+    rvatDataStatus := commonDataStatus != '' ? commonDataStatus : rvat_len < hAverageFloor ? 'Requested maximum is below the higher-TF minimum.' : not hPathCompatible ? 'Historical source is coarser than the selected block. Use Auto or finer sampling.' : na(rvatToday) ? 'Current matching block source is unavailable.' : rvatSampleCount < hAverageFloor ? 'Insufficient valid historical chart periods at this trading-session point.' : na(rvatAverage) or rvatAverage <= 0 ? 'Historical mean unavailable or zero; no finite RVOL ratio.' : rvatSampleCount < rvat_len ? 'Adaptive partial chart-period sample.' : 'Requested chart-period sample complete.'
+    participationDataStatus := commonDataStatus != '' ? commonDataStatus : participation_len < hRankFloor ? 'Requested maximum is below the higher-TF percentile minimum.' : participationSampleCount < hRankFloor ? 'Insufficient valid same-time chart-period observations.' : participationUsesVolumeProxy ? 'Explicit same-time VOLUME proxy selected; no historical float is manufactured.' : 'Reported-FY-float chart-period turnover ranking.'
+    adrDataStatus := commonDataStatus != '' ? commonDataStatus : adr_pace_len < hAverageFloor ? 'Requested maximum is below the higher-TF minimum.' : adrPaceSampleCount < hAverageFloor ? 'Too few valid range observations; an early partial source interval has no completed high/low yet.' : 'Average chart-period range, adjusted for historical range development by this point.'
+    string hDiagnostics = 'Inspected ' + str.tostring(hScanned) + '/' + str.tostring(hScanLimit) + ' earlier chart bars. Invalid periods=' + str.tostring(hBadPeriod) + '; too few trading sessions=' + str.tostring(hTooShort) + '; no source history=' + str.tostring(hNoPath) + '; initial/clipped periods=' + str.tostring(hClipped) + '; invalid/inconsistent paths=' + str.tostring(hBadPath) + '; source/daily session-count mismatch=' + str.tostring(hBadDays) + '; missing FY float=' + str.tostring(hMissingFloat) + '; no completed range yet=' + str.tostring(hNoRange) + '.'
+    string hMethod = 'Matching rule: same ordinal trading session and same fraction of that session. Weekends/closed days do not advance the clock. A holiday week can therefore compare its Wednesday (second session) with another week\'s Tuesday (second session). A short historical period that cannot reach the current ordinal is excluded; it is not padded. At the candle close all previous full periods are comparable.'
+    string hSampling = 'Historical path: ' + hHistoryTf + '; maximum request 100,000 source bars. Partial VOLUME intervals are time-weighted; RANGE uses only completed intervals. Intraday/period feed volumes are reconciled proportionally; same-time history is an estimate. No normal market calendar or volume curve is hard-coded.'
+    rvatSpanText := not na(rvatOldestStart) ? str.format_time(rvatOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(rvatNewestStart, 'yyyy-MM-dd', syminfo.timezone) + '; oldest ' + str.tostring(rvatOldestOffset) + ' chart bars back' : 'none'
+    participationSpanText := not na(participationOldestStart) ? str.format_time(participationOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(participationNewestStart, 'yyyy-MM-dd', syminfo.timezone) : 'none'
+    participationVolumeSpanText := not na(participationVolumeOldestStart) ? str.format_time(participationVolumeOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(participationVolumeNewestStart, 'yyyy-MM-dd', syminfo.timezone) : 'none'
+    adrSpanText := not na(adrOldestStart) ? str.format_time(adrOldestStart, 'yyyy-MM-dd', syminfo.timezone) + ' to ' + str.format_time(adrNewestStart, 'yyyy-MM-dd', syminfo.timezone) : 'none'
+    rvatTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nStatus: ' + rvatDataStatus + '\nChart: ' + periodTag + '; window: ' + sameTimeWindowText + '. Current selected-window volume=' + f_compactNumber(rvatToday) + '; historical same-time mean=' + f_compactNumber(rvatAverage) + '; matched full-period mean=' + f_compactNumber(rvatHistoricalFullDayAvg) + '; completion=' + completionText + '. Ratio=' + (not na(rvatRatio) ? str.tostring(rvatRatio, '0.0000') : '-') + '.\nSample n=' + str.tostring(rvatSampleCount) + '/' + str.tostring(rvat_len) + ' max; minimum=' + str.tostring(hAverageFloor) + '; dates=' + rvatSpanText + '.\n' + hMethod + '\n' + hSampling + '\n' + hDiagnostics
+    participationTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nStatus: ' + participationDataStatus + '\nChart: ' + periodTag + '; window: ' + sameTimeWindowText + '. Turnover=' + f_signedPct(participationIntensity, '0.00') + '. Display n=' + str.tostring(participationSampleCount) + '/' + str.tostring(participation_len) + ' max; minimum=' + str.tostring(hRankFloor) + '.\nReported-FY-float sample=' + str.tostring(participationReportedCount) + ', percentile=' + (not na(participationReportedPctile) ? str.tostring(participationReportedPctile, '0.0') : '-') + '; dates=' + participationSpanText + '. Separate volume sample=' + str.tostring(participationVolumeCount) + ', percentile=' + (not na(participationVolumePctile) ? str.tostring(participationVolumePctile, '0.0') : '-') + '; dates=' + participationVolumeSpanText + '.\nFY float is the provider\'s snapshot mapped to each historical CHART PERIOD, not an exact within-period or publication-time float history. Current float is not backfilled. A [proxy] ranks volumes consistently for the entire sample; no mixture of denominators. Small sample percentiles have coarse resolution.\n' + hMethod + '\n' + hSampling + '\n' + hDiagnostics
+    adrPaceTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nStatus: ' + adrDataStatus + '\nChart: ' + periodTag + '; window: ' + sameTimeWindowText + '. ' + rangeTag + '%=' + str.tostring(arp, '0.0000') + '; historical range-development factor=' + adrProgressText + '. Pace = signed chart-period open-to-current return / (' + rangeTag + '% * range-development factor). At the completed period close the factor is 1.0. This is not the candle high-low range divided by an average.\nSample n=' + str.tostring(adrPaceSampleCount) + '/' + str.tostring(adr_pace_len) + ' max; minimum=' + str.tostring(hAverageFloor) + '; dates=' + adrSpanText + '.\n' + hMethod + '\n' + hSampling + '\n' + hDiagnostics
+    vwapDataStatus := na(hVwapKey) ? 'Native anchored source unavailable.' : hVwapKey != hPeriodStart ? 'Wrong-period anchor; no substitute is displayed.' : not hVwapReady ? 'Initial/clipped or invalid source anchor.' : na(sessionVWAP) ? 'Native source or timestamps failed validation.' : 'Native HLC3 VWAP anchored to the chart candle, using ' + hVwapTf + ' source bars.'
+    vwapDistanceTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nStatus: ' + vwapDataStatus + '\nChart/anchor: ' + periodTag + '. Price=' + str.tostring(hPeriodClose, '0.0000') + '; period VWAP=' + (not na(sessionVWAP) ? str.tostring(sessionVWAP, '0.0000') : '-') + '; distance=100*(price/VWAP-1)=' + f_signedPct(distanceFromVWAP, '0.0000') + '.\nSource: regular hours, ' + hVwapTf + ', HLC3; reset at each ' + periodTag + ' boundary, NOT daily. Latest source bar=' + vwapSourceMinuteText + '. Source volume=' + f_compactNumber(hVwapVolume) + '; native period volume=' + f_compactNumber(hPeriodVolume) + '. No unmatched volume is priced at the latest quote.\nVWAP is a bar-source estimate, not transaction-level consolidated VWAP. Match symbol, source resolution, regular-hours session and anchor in any comparison. A manual resolution too fine to include the anchor remains unavailable rather than being silently changed.'
+    economicThroughputTooltip := 'Chart period ' + periodTag + ': estimated notional = anchored native period VWAP * native period volume. Throughput = 100 * estimated notional / (current float * current price). Gross transactional throughput, not net inflow. This assumes the source VWAP is representative of all period-feed trades.'
+    hProjectionTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nHigher-period seasonal SHARE projection, independent of cumulative/per-block display. Projected full-period volume = current period volume / historical cumulative completion. Current=' + f_compactNumber(hPeriodVolume) + '; completion=' + (not na(hShareCompletion) ? str.tostring(100.0 * hShareCompletion, '0.00') + '%' : '-') + '; projected=' + f_compactNumber(hProjectedVolume) + '; mean full-period volume=' + f_compactNumber(hShareAverage) + '. Buzz=100*(projected/mean-1).\nHistorical sample=' + str.tostring(hShareProjectionCount) + '/' + str.tostring(len) + ' max, minimum=' + str.tostring(hAverageFloor) + '. Current period excluded from historical average. At the period close projected equals realised volume. Conditional pace estimate, not a forecast guarantee.\n' + hMethod + '\n' + hSampling
+    hDollarProjectionTooltip := 'Build: MULTIFRAME-INTRADAY-2026-10-13-v2\nHigher-period seasonal DOLLAR projection. Estimated period notional = source HLC3 VWAP * period volume; historical values use the same construction at the history-source resolution. Current estimate=' + f_compactNumber(hCurrentDollarVolume) + '; separate dollar completion=' + (not na(hDollarCompletion) ? str.tostring(100.0 * hDollarCompletion, '0.00') + '%' : '-') + '; projected=' + f_compactNumber(hProjectedDollarVolume) + '; mean full-period estimated notional=' + f_compactNumber(hDollarAverage) + '.\nHistorical sample=' + str.tostring(hDollarProjectionCount) + '/' + str.tostring(dollar_vol_len) + ' max, minimum=' + str.tostring(hAverageFloor) + '. Current period excluded. Estimate, not exact transaction-level dollar volume or a forecast guarantee.\n' + hSampling
+
+// Below 1D, say plainly which data the table is showing.
+if tfIntraday
+    string iMirrorNote = 'Intraday chart (' + timeframe.period + '): showing the live 1D-chart reading; intraday candles are not used as observations.\n'
+    rvatTooltip := iMirrorNote + rvatTooltip
+    participationTooltip := iMirrorNote + participationTooltip
+    adrPaceTooltip := iMirrorNote + adrPaceTooltip
+    vwapDistanceTooltip := iMirrorNote + vwapDistanceTooltip
+    economicThroughputTooltip := iMirrorNote + economicThroughputTooltip
+    varTooltip := iMirrorNote + varTooltip
+    var5Tooltip := iMirrorNote + var5Tooltip
+    esTooltip := iMirrorNote + esTooltip
+    stressTooltip := iMirrorNote + stressTooltip
+// The main daily/intraday projection uses historic *fractions*, not linear time.
+string dailyProjectionTooltip = 'Daily seasonal projections: current cumulative shares / average historical cumulative-volume fraction at the same session time; dollar projection uses a SEPARATE historical cumulative-notional fraction. Both require 21 valid historical sessions and at least ' + str.tostring(min_projection_minutes) + ' elapsed regular-session minutes. Share n=' + str.tostring(projectionShareN) + '/' + str.tostring(len) + ', dollar n=' + str.tostring(projectionDollarN) + '/' + str.tostring(dollar_vol_len) + '. Input feed: ' + rvat_intratf + ' minute regular-session HLC3/volume, matched to full-session totals. Missing/incomplete source history gives N/A, not a straight-line substitute. At the session close projection equals realised volume/notional. This is an estimate, not a trading-volume promise.'
+// 2) Average Daily Vol
+avgDaVol = request.security(s, tf, ma)
+avgDaVolCalc = avgDaVol
+uV = ''
+if(avgDaVol >= 1000 and avgDaVol < 1000000)
+    avgDaVol := avgDaVol/1000
+    uV := 'K'
+if(avgDaVol >= 1000000 and avgDaVol < 1000000000)
+    avgDaVol := avgDaVol/1000000
+    uV := 'M'
+if(avgDaVol >= 1000000000)
+    avgDaVol := avgDaVol/1000000000
+    uV := 'B'
+// 3) Average Daily $ Vol
+// Below 1D, Market Cap fallback and Float % use the daily close, as on the 1D chart.
+closeDa = request.security(s, tfIntraday ? 'D' : tf, close)
+dolVol = vol * close // Dollar volume for current bar
+dolVolMA = ta.sma(dolVol[1], dollar_vol_len) // Dollar volume MA with separate length parameter
+advdolDa = request.security(s, tf, dolVolMA)
+uVDoll = ''
+if(advdolDa >= 1000 and advdolDa < 1000000)
+    advdolDa := advdolDa/1000
+    uVDoll := 'K'
+if(advdolDa >= 1000000 and advdolDa < 1000000000)
+    advdolDa := advdolDa/1000000
+    uVDoll := 'M'
+if(advdolDa >= 1000000000)
+    advdolDa := advdolDa/1000000000
+    uVDoll := 'B'
+// Other parameters
+// 4)  Market Cap
+MCap = request.financial(s, 'MARKET_CAP_BASIC', 'D', ignore_invalid_symbol=true)
+// Case where 'MARKET_CAP_BASIC' returns NaN
+TSO = request.financial(s, 'TOTAL_SHARES_OUTSTANDING', 'FQ', ignore_invalid_symbol=true)
+if na(MCap)
+    MCap := TSO*closeDa
+MCapCalc = MCap
+uM = ''
+if(MCap >= 1000 and MCap < 1000000)
+    MCap := MCap/1000
+    uM := 'K'
+if(MCap >= 1000000 and MCap < 1000000000)
+    MCap := MCap/1000000
+    uM := 'M'
+if(MCap >= 1000000000)
+    MCap := MCap/1000000000
+    uM := 'B'
+// 5) Float%
+// Float is resolved above for the participation calculations (live value with FY history fallback).
+// Prefer same-basis LIVE share counts, rather than float-cap / unrelated reported cap.
+// A mismatch is missing data, NOT a value to be force-capped to 100%.
+float liveTotalShares = syminfo.shares_outstanding_total
+float totalSharesBasis = not na(liveTotalShares) and liveTotalShares > 0 ? liveTotalShares : TSO
+bool floatSharesConsistent = not na(totalSharesBasis) and totalSharesBasis > 0 and not na(FSO) and FSO >= 0 and FSO <= totalSharesBasis * 1.000001
+float floatPer = floatSharesConsistent ? 100.0 * FSO / totalSharesBasis : na
+float internallyConsistentCap = not na(totalSharesBasis) and totalSharesBasis > 0 and closeDa > 0 ? totalSharesBasis * closeDa : na
+float reportedCapDifference = not na(internallyConsistentCap) and internallyConsistentCap > 0 and not na(MCapCalc) ? 100.0 * (MCapCalc / internallyConsistentCap - 1.0) : na
+string floatBasisTooltip = 'Float% = currently available free-float shares / compatible total shares, not float market cap / a separately reported market cap. Current denominator: ' + (not na(liveTotalShares) and liveTotalShares > 0 ? 'live symbol total shares.' : 'FQ reported total shares fallback.') + ' If free float exceeds total, show N/A rather than a misleading 100%+ number. Financial FY float history is an approximation, not publication-time/PIT ownership data.'
+string mCapTooltip = 'Reported market cap uses MARKET_CAP_BASIC where available, otherwise reported FQ shares × price. It may not match live share-count × price because source dates/currencies/share classes differ. Difference versus internally consistent total shares × price: ' + (na(reportedCapDifference) ? 'N/A' : f_signedPct(reportedCapDifference, '0.0')) + '. Treat large discrepancies as data-quality warnings.'
+// 6) Projected session volume, using independent same-time historical profiles.
+// No straight-line projection through overnight, lunch breaks or the opening burst.
+// Full-period realised volume is returned after the regular session closes.
+float volume_projected_unscaled = na
+float dollar_volume_projected_unscaled = na
+bool forecastClockReady = not na(rvatElapsedMinutes) and rvatElapsedMinutes >= min_projection_minutes
+if tfOneDay
+    volume_projected_unscaled := rvatSessionComplete ? rvatDailyVolume : forecastClockReady and not na(projectionShareCompletion) and projectionShareCompletion > 0 ? rvatDailyVolume / projectionShareCompletion : na
+    dollar_volume_projected_unscaled := rvatSessionComplete ? sessionDollarVolume : forecastClockReady and not na(projectionDollarCompletion) and projectionDollarCompletion > 0 and not na(sessionDollarVolume) ? sessionDollarVolume / projectionDollarCompletion : na
+// Higher chart periods have a separate native historical-completion engine below.
+// Intraday charts mirror exactly the regular-session daily projection values.
+float volume_projected = volume_projected_unscaled
+float dollar_volume_projected = dollar_volume_projected_unscaled
+string uP = ''
+string uDP = ''
+if not na(volume_projected)
+    uP := math.abs(volume_projected) >= 1000000000 ? 'B' : math.abs(volume_projected) >= 1000000 ? 'M' : math.abs(volume_projected) >= 1000 ? 'K' : ''
+    volume_projected /= uP == 'B' ? 1000000000.0 : uP == 'M' ? 1000000.0 : uP == 'K' ? 1000.0 : 1.0
+if not na(dollar_volume_projected)
+    uDP := math.abs(dollar_volume_projected) >= 1000000000 ? 'B' : math.abs(dollar_volume_projected) >= 1000000 ? 'M' : math.abs(dollar_volume_projected) >= 1000 ? 'K' : ''
+    dollar_volume_projected /= uDP == 'B' ? 1000000000.0 : uDP == 'M' ? 1000000.0 : uDP == 'K' ? 1000.0 : 1.0
+// 7) Volume Buzz based on projected volume
+volBuzz = not na(ma) and ma > 0 and not na(volume_projected_unscaled) ? 100.0 * (volume_projected_unscaled / ma - 1.0) : na
+// 7b) Dollar Volume Buzz based on projected dollar volume
+dolVolBuzz = not na(dolVolMA) and dolVolMA > 0 and not na(dollar_volume_projected_unscaled) ? 100.0 * (dollar_volume_projected_unscaled / dolVolMA - 1.0) : na
+// Higher periods use their separate native historical-completion projection.
+// Daily and intraday charts use independently estimated seasonal completion fractions.
+if tfHigher
+    avgDaVolCalc := hShareAverage
+    uV := not na(hShareAverage) and hShareAverage >= 1000000000 ? 'B' : not na(hShareAverage) and hShareAverage >= 1000000 ? 'M' : not na(hShareAverage) and hShareAverage >= 1000 ? 'K' : ''
+    avgDaVol := hShareAverage / (uV == 'B' ? 1000000000.0 : uV == 'M' ? 1000000.0 : uV == 'K' ? 1000.0 : 1.0)
+    uVDoll := not na(hDollarAverage) and hDollarAverage >= 1000000000 ? 'B' : not na(hDollarAverage) and hDollarAverage >= 1000000 ? 'M' : not na(hDollarAverage) and hDollarAverage >= 1000 ? 'K' : ''
+    advdolDa := hDollarAverage / (uVDoll == 'B' ? 1000000000.0 : uVDoll == 'M' ? 1000000.0 : uVDoll == 'K' ? 1000.0 : 1.0)
+    volume_projected_unscaled := hProjectedVolume
+    dollar_volume_projected_unscaled := hProjectedDollarVolume
+    uP := not na(hProjectedVolume) and hProjectedVolume >= 1000000000 ? 'B' : not na(hProjectedVolume) and hProjectedVolume >= 1000000 ? 'M' : not na(hProjectedVolume) and hProjectedVolume >= 1000 ? 'K' : ''
+    volume_projected := hProjectedVolume / (uP == 'B' ? 1000000000.0 : uP == 'M' ? 1000000.0 : uP == 'K' ? 1000.0 : 1.0)
+    uDP := not na(hProjectedDollarVolume) and hProjectedDollarVolume >= 1000000000 ? 'B' : not na(hProjectedDollarVolume) and hProjectedDollarVolume >= 1000000 ? 'M' : not na(hProjectedDollarVolume) and hProjectedDollarVolume >= 1000 ? 'K' : ''
+    dollar_volume_projected := hProjectedDollarVolume / (uDP == 'B' ? 1000000000.0 : uDP == 'M' ? 1000000.0 : uDP == 'K' ? 1000.0 : 1.0)
+    volBuzz := not na(hShareAverage) and hShareAverage > 0 and not na(hProjectedVolume) ? 100.0 * (hProjectedVolume / hShareAverage - 1.0) : na
+    dolVolBuzz := not na(hDollarAverage) and hDollarAverage > 0 and not na(hProjectedDollarVolume) ? 100.0 * (hProjectedDollarVolume / hDollarAverage - 1.0) : na
+    relVol := not na(hShareAverage) and hShareAverage > 0 ? 100.0 * hPeriodVolume / hShareAverage : na
+// Below 1D, the volume rows use the 1D chart's daily bar and daily averages. The 1D linear
+// projection equations above are kept exactly; only their inputs come from the daily bar.
+if tfIntraday
+    // Daily mirror: same daily same-time seasonal numerator and completion profile.
+    // No chart-clock extrapolation (an hourly bar is not an independent daily session).
+    float iVolumeProjected = rvatSessionComplete ? iDayVolume : forecastClockReady and not na(projectionShareCompletion) and projectionShareCompletion > 0 ? iDayVolume / projectionShareCompletion : na
+    float iDollarProjected = rvatSessionComplete ? sessionDollarVolume : forecastClockReady and not na(projectionDollarCompletion) and projectionDollarCompletion > 0 and not na(sessionDollarVolume) ? sessionDollarVolume / projectionDollarCompletion : na
+    relVol := not na(iDayVolumeMA) and iDayVolumeMA > 0 ? 100.0 * iDayVolume / iDayVolumeMA : na
+    volBuzz := not na(iDayVolumeMA) and iDayVolumeMA > 0 and not na(iVolumeProjected) ? 100.0 * (iVolumeProjected / iDayVolumeMA - 1) : na
+    dolVolBuzz := not na(iDayDollarVolumeMA) and iDayDollarVolumeMA > 0 and not na(iDollarProjected) ? 100.0 * (iDollarProjected / iDayDollarVolumeMA - 1) : na
+    volume_projected_unscaled := iVolumeProjected
+    dollar_volume_projected_unscaled := iDollarProjected
+    avgDaVolCalc := iDayVolumeMA
+    uV := not na(iDayVolumeMA) and iDayVolumeMA >= 1000000000 ? 'B' : not na(iDayVolumeMA) and iDayVolumeMA >= 1000000 ? 'M' : not na(iDayVolumeMA) and iDayVolumeMA >= 1000 ? 'K' : ''
+    avgDaVol := iDayVolumeMA / (uV == 'B' ? 1000000000.0 : uV == 'M' ? 1000000.0 : uV == 'K' ? 1000.0 : 1.0)
+    uVDoll := not na(iDayDollarVolumeMA) and iDayDollarVolumeMA >= 1000000000 ? 'B' : not na(iDayDollarVolumeMA) and iDayDollarVolumeMA >= 1000 ? 'K' : ''
+    uVDoll := not na(iDayDollarVolumeMA) and iDayDollarVolumeMA >= 1000000 ? 'M' : uVDoll
+    advdolDa := iDayDollarVolumeMA / (uVDoll == 'B' ? 1000000000.0 : uVDoll == 'M' ? 1000000.0 : uVDoll == 'K' ? 1000.0 : 1.0)
+    uP := not na(iVolumeProjected) and iVolumeProjected >= 1000000000 ? 'B' : not na(iVolumeProjected) and iVolumeProjected >= 1000000 ? 'M' : not na(iVolumeProjected) and iVolumeProjected >= 1000 ? 'K' : ''
+    volume_projected := iVolumeProjected / (uP == 'B' ? 1000000000.0 : uP == 'M' ? 1000000.0 : uP == 'K' ? 1000.0 : 1.0)
+    uDP := not na(iDollarProjected) and iDollarProjected >= 1000000000 ? 'B' : not na(iDollarProjected) and iDollarProjected >= 1000000 ? 'M' : not na(iDollarProjected) and iDollarProjected >= 1000 ? 'K' : ''
+    dollar_volume_projected := iDollarProjected / (uDP == 'B' ? 1000000000.0 : uDP == 'M' ? 1000000.0 : uDP == 'K' ? 1000.0 : 1.0)
+
+// 8) Sector
+string sector = syminfo.sector
+if(na(sector))
+    sector := 'N/A'
+// 9) Industry group
+string industryGrp = syminfo.industry
+if(na(industryGrp))
+    industryGrp := 'N/A'
+// 10) Derived RS Ratio vs SPX and optional externally calibrated 1-99 score.
+// Without seven valid, strictly descending seed calibration thresholds, show N/A.
+int n63 = math.min(bar_index, 63)
+int n126 = math.min(bar_index, 126)
+int n189 = math.min(bar_index, 189)
+int n252 = math.min(bar_index, 252)
+closeDa := request.security(syminfo.tickerid, tfHigher ? timeframe.period : 'D', close)
+float spxCloseDa = request.security('SP:SPX', tfHigher ? timeframe.period : 'D', close)
+float perfStock = 0.4 * (closeDa / closeDa[n63]) + 0.2 * (closeDa / closeDa[n126]) + 0.2 * (closeDa / closeDa[n189]) + 0.2 * (closeDa / closeDa[n252])
+float perfIndex = 0.4 * (spxCloseDa / spxCloseDa[n63]) + 0.2 * (spxCloseDa / spxCloseDa[n126]) + 0.2 * (spxCloseDa / spxCloseDa[n189]) + 0.2 * (spxCloseDa / spxCloseDa[n252])
+float totalRsScore = not na(perfIndex) and perfIndex > 0 ? 100.0 * perfStock / perfIndex : na
+float curveRsPerf = request.seed('seed_fred6725_rs_rating', 'RSRATING', close)
+float totalRsRating = f_rsCalibrated(totalRsScore, curveRsPerf)
+if tfIntraday
+    // Carry exact daily metrics onto lower timeframes; no intraday horizons.
+    totalRsScore := iRsScore
+    totalRsRating := iRsRating
+string rsRatingTooltip = tfHigher ? 'Weighted relative-strength RATIO versus SPX on chart-period horizons. 100 = parity; this is NOT a 1–99 percentile. A weekly 63-bar input means 63 weeks.' : 'Approximate 1–99 RS rank, calculated from weighted 63/126/189/252-day performance versus SPX and an external request.seed calibration. Requires seven positive STRICTLY descending thresholds; otherwise N/A. Neither a complete-universe ranking nor an official IBD RS Rating. Source data availability can change.'
+// 11) Liquidity Cap (Based on 1% of MA Volume Length)
+volDa        = request.security(s, 'D', volume)
+// Liquidity cap is DAILY, including on weekly/monthly charts; use only
+// completed regular-session daily volumes in the reference average.
+float dailyADV = request.security(regularTicker, 'D', ta.sma(volume[1], len), gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off, ignore_invalid_symbol=true)
+liquidityCap = not na(dailyADV) ? dailyADV * 0.01 : na
+float daysToLiquidate = position_shares > 0 and not na(dailyADV) and dailyADV > 0 ? position_shares / (dailyADV * max_adv_participation_pct / 100.0) : na
+// 12) Up/Down Volume Ratio
+upVol =         close > close[1] ? volume : 0
+dnVol =         close < close[1] ? volume : 0
+sumUp =         math.sum(upVol, 50)
+sumDn =         math.sum(dnVol, 50)
+upDnVolRatio = sumDn > 0 ? sumUp / sumDn : na
+if tfIntraday
+    upDnVolRatio := iUpDnVolRatio
+// 13) Distance% From 52 Week High/Low
+fiftyTwoWeekHigh = request.security(syminfo.tickerid, 'W', ta.highest(high,52)) // 52-week high
+fiftyTwoWeekLow  = request.security(syminfo.tickerid, 'W', ta.lowest(low,52))   // 52-week low
+distFromHigh = 100 * (closeDa/fiftyTwoWeekHigh-1)
+distFromLow  = 100 * (closeDa/fiftyTwoWeekLow-1)
+// 14) Shares Float
+// UPDATED: use the same resolved float (live -> FY fallback) for display
+sharesFloat = FSO
+uF = ''
+if(sharesFloat >= 1000 and sharesFloat < 1000000)
+    sharesFloat := sharesFloat/1000
+    uF := 'K'
+if(sharesFloat >= 1000000 and sharesFloat < 1000000000)
+    sharesFloat := sharesFloat/1000000
+    uF := 'M'
+if(sharesFloat >= 1000000000)
+    sharesFloat := sharesFloat/1000000000
+    uF := 'B'
+// Define colours based on conditions
+dolVolBuzzColor = dolVolBuzz > 100 ? color.green : txt_col
+volBuzzColor = volBuzz > 100 ? color.green : txt_col
+relVolColor = relVolExceeded50InFirst30Min ? color.yellow : txt_col
+adrpColor = arp > 5 ? color.green : txt_col
+rvatColor = not na(rvatRatio) and rvatRatio > 1.0 ? color.green : txt_col
+participationPctileColor = na(participationPctile) ? txt_col : participationPctile >= 90 ? color.green : participationPctile <= 10 ? color.red : txt_col
+dayRangeColor = na(dayRangePosition) ? txt_col : dayRangePosition >= 80 ? color.green : dayRangePosition <= 20 ? color.red : txt_col
+vwapDistanceColor = na(distanceFromVWAP) ? txt_col : distanceFromVWAP >= 0 ? color.green : color.red
+priceImpactColor = na(priceImpactPerTurnover) ? txt_col : priceImpactPerTurnover >= 0 ? color.green : color.red
+adrPaceColor = na(adrPaceAtTime) ? txt_col : adrPaceAtTime > 0 ? color.green : adrPaceAtTime < 0 ? color.red : txt_col
+// ── Unified table renderer ──────────────────────────────────────────────────
+// All 9 anchors, 5 font sizes, Custom-by-default row controls and fixed presets.
+// Row visibility is presentation-only. The calculation engines remain active.
+// Restore the supported-timeframe flag used by the table rows.
+bool tfDaily = tfPeriodSupported or tfIntraday
+f_rowEnabled(bool enabled, bool inCompact) =>
+    tablePreset == 'Full Research' ? true : tablePreset == 'Compact' ? inCompact : enabled
+
+f_tableRow(table board, int row, string metric, string reading, color metricColour, string description) =>
+    table.cell(board, 0, row, metric, text_color=metricColour, text_size=size_tbl, text_halign=align_txt_left, tooltip=description)
+    table.cell(board, 1, row, reading, text_color=metricColour, text_size=size_tbl, text_halign=align_txt_right, tooltip=description)
+
+// Compact deliberately resembles the trader's original screenshot.
+// Custom uses the individual Display toggles; Full Research shows every row.
+var table t = table.new(tablePos, 2, 44, bgcolor=bg_col)
+if barstate.islast
+    table.clear(t, 0, 0, 1, 43)
+    int tableRow = 0
+    if show_empty_row
+        table.cell(t, 0, tableRow, ' ', text_color=txt_col, text_size=size_tbl)
+        tableRow += 1
+    string standardRiskSuffix = in_percent ? '%' : ''
+    string todayRangeStatus = na(dayRangePosition) ? '-' : str.tostring(dayRangePosition, '0') + '%'
+    string projectedShareDisplay = tfHigher ? f_compactNumber(hProjectedVolume) : f_compactNumber(volume_projected_unscaled)
+    string projectedNotionalDisplay = tfHigher ? f_compactNumber(hProjectedDollarVolume) : f_compactNumber(dollar_volume_projected_unscaled)
+    string projectionInfo = tfHigher ? hProjectionTooltip : dailyProjectionTooltip
+    string dollarProjectionInfo = tfHigher ? hDollarProjectionTooltip : dailyProjectionTooltip
+    string rsValue = tfHigher ? (na(totalRsScore) ? '-' : str.tostring(totalRsScore, '0.0') + ' [ratio]') : na(totalRsRating) ? 'N/A' : str.tostring(totalRsRating, '0.0') + ' [est.]'
+    string currentDataQuality = (floatSharesConsistent ? 'Float OK; ' : 'FLOAT MISMATCH; ') + 'VaR: ' + str.tostring(varSampleCount) + '/' + str.tostring(var_len) + '; RV@Time: ' + str.tostring(rvatSampleCount) + '/' + str.tostring(rvat_len) + '; participation: ' + str.tostring(participationSampleCount) + '/' + str.tostring(participation_len) + (participationUsesVolumeProxy ? ' [V-proxy]' : ' [FY est.]')
+    string dataQualityTooltip = tailQuality + '\n' + participationTooltip + '\n' + rvatTooltip
+    string efficiencyTooltip = 'Signed candle body / range = 100*(period close-period open)/(period high-period low). -100 to +100%. +60% means an upward net body equal to 60% of the range; it is NOT a 60% price gain or a path-smoothness score. Zero means close=open, even after large swings. Does not establish institutional accumulation. Zero high-low range is unavailable.'
+    string projectedSharesValue = na(volume_projected_unscaled) ? '-' : projectedShareDisplay
+    string projectedDollarsValue = na(dollar_volume_projected_unscaled) ? '-' : '$' + projectedNotionalDisplay
+    string marketCapValue = f_compactNumber(MCapCalc)
+    string floatCountValue = f_compactNumber(FSO)
+    string avgShareValue = tfHigher ? f_compactNumber(hShareAverage) : f_compactNumber(avgDaVolCalc)
+    string avgDollarValue = tfHigher ? f_compactNumber(hDollarAverage) : tfIntraday ? f_compactNumber(iDayDollarVolumeMA) : f_compactNumber(dolVolMA)
+    if f_rowEnabled(show_mktCap, true)
+        f_tableRow(t, tableRow, 'Market Cap', marketCapValue, txt_col, mCapTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_float, true)
+        f_tableRow(t, tableRow, 'Shares Float', floatCountValue, txt_col, floatBasisTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_floatpercent, true)
+        f_tableRow(t, tableRow, 'Float %', na(floatPer) ? 'N/A [mismatch]' : str.tostring(floatPer, '0.0') + '%', na(floatPer) ? color.red : txt_col, floatBasisTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_float_turnover, true)
+        f_tableRow(t, tableRow, tfHigher ? periodName + ' Float Turnover' : 'Float Turnover', tfDaily ? f_signedPct(participationIntensity,'0.00') : '-', txt_col, 'Regular-session traded share volume / current available free-float shares. Gross activity, NOT the percentage of unique ownership transferred.')
+        tableRow += 1
+    if f_rowEnabled(show_participation_pctile, true)
+        f_tableRow(t, tableRow, participationRowLabel, tfDaily and not na(participationPctile) ? str.tostring(participationPctile,'0.0') + 'th (n=' + str.tostring(participationSampleCount) + ')' : '-', participationPctileColor, participationTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_adrp, true)
+        f_tableRow(t, tableRow, rangeTag + '%', na(arp) ? '-' : str.tostring(arp, '0.00') + '%', adrpColor, 'Average range %; selected denominator = ' + adrp_basis + '. This differs from Wilder ATR% and may use a different period length.')
+        tableRow += 1
+    if f_rowEnabled(show_adr_comparable, false)
+        f_tableRow(t, tableRow, 'Range% / prev close', na(arpComparable) ? '-' : str.tostring(arpComparable, '0.00') + '%', txt_col, 'Comparison-friendly price range %: average of 100 × (high-low) / prior close across the selected range window.')
+        tableRow += 1
+    if f_rowEnabled(show_adr_pace, false)
+        f_tableRow(t, tableRow, rangeTag + ' Pace @Time', adrPaceDisplayText, adrPaceColor, adrPaceTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_atrPer, true)
+        f_tableRow(t, tableRow, 'ATR%', na(atrp) ? '-' : str.tostring(atrp, '0.00') + '%', txt_col, 'Wilder ATR divided by current close; includes gaps and uses the ATR lookback length.')
+        tableRow += 1
+    if f_rowEnabled(show_var, true)
+        f_tableRow(t, tableRow, 'VaR ' + str.tostring(percentile) + '%' + (tfHigher ? ' (' + periodTag + ')' : ''), na(VaR) ? '-' : str.tostring(VaR,'0.00') + standardRiskSuffix + varSampleSuffix, txt_col, varTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_var5, false)
+        f_tableRow(t, tableRow, 'VaR 5% (prior returns)', na(VaR5) ? '-' : str.tostring(VaR5,'0.00') + standardRiskSuffix, txt_col, var5Tooltip)
+        tableRow += 1
+    if f_rowEnabled(show_es5, true)
+        f_tableRow(t, tableRow, 'Expected Shortfall 5%', na(ES5) ? '-' : str.tostring(ES5,'0.00') + standardRiskSuffix, txt_col, esTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_var_plus_3sigma, false)
+        f_tableRow(t, tableRow, 'Legacy stress: VaR − 3σ', na(VaR_plus_3sigma) ? '-' : str.tostring(VaR_plus_3sigma,'0.00') + standardRiskSuffix, txt_col, stressTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_atr, false)
+        f_tableRow(t, tableRow, 'ATR (price units)', na(atr) ? '-' : str.tostring(atr, '0.00'), txt_col, 'Wilder ATR in the quote currency, not a percentage.')
+        tableRow += 1
+    if f_rowEnabled(show_ipo_date, false)
+        f_tableRow(t, tableRow, 'Available daily history (~yr)', str.tostring(ipoSince, '0.00'), txt_col, 'Approximately daily bars on provider chart / 252. NOT verified IPO age, may reflect truncated historical data.')
+        tableRow += 1
+    if f_rowEnabled(show_lod_dist, false)
+        f_tableRow(t, tableRow, tfHigher ? periodName + ' Low (ATR units)' : 'Above LoD (ATR units)', na(lod_dist) ? '-' : str.tostring(lod_dist/100.0,'0.00')+'x ATR', txt_col, 'Distance above current period low divided by ATR, NOT percent of price.')
+        tableRow += 1
+    if f_rowEnabled(show_lod_price, false)
+        f_tableRow(t, tableRow, tfHigher ? periodName + ' Low Price' : 'LoD Price', str.tostring(lod_price, '0.00'), txt_col, 'Lowest price within this period.')
+        tableRow += 1
+    if f_rowEnabled(show_dist_high, false)
+        f_tableRow(t, tableRow, 'Off 52W High', na(distFromHigh) ? '-' : f_signedPct(distFromHigh,'0.0'), txt_col, 'Closing price versus high of last 52 calendar trading weeks.')
+        tableRow += 1
+    if f_rowEnabled(show_dist_low, false)
+        f_tableRow(t, tableRow, 'Above 52W Low', na(distFromLow) ? '-' : f_signedPct(distFromLow,'0.0'), txt_col, 'Closing price versus low of last 52 trading weeks.')
+        tableRow += 1
+    if f_rowEnabled(show_ADVS, false)
+        f_tableRow(t, tableRow, tfHigher ? 'Avg ' + periodTag + ' $ Vol' : 'Avg $ Vol', avgDollarValue == '-' ? '-' : '$' + avgDollarValue, txt_col, dollarProjectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_proj_dollar_vol, false)
+        f_tableRow(t, tableRow, tfHigher ? 'Proj. ' + periodTag + ' $ Vol' : 'Projected $ Vol', projectedDollarsValue, txt_col, dollarProjectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_dolVolBuzz, false)
+        f_tableRow(t, tableRow, '$ Vol. Buzz', f_signedPct(dolVolBuzz,'0'), dolVolBuzzColor, dollarProjectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_ADV, false)
+        f_tableRow(t, tableRow, tfHigher ? 'Avg ' + periodTag + ' Vol' : 'Avg Vol', avgShareValue, txt_col, projectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_projectedVol, false)
+        f_tableRow(t, tableRow, tfHigher ? 'Proj. ' + periodTag + ' Vol' : 'Projected Volume', projectedSharesValue, txt_col, projectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_volBuzz, false)
+        f_tableRow(t, tableRow, 'Volume Buzz', f_signedPct(volBuzz,'0'), volBuzzColor, projectionInfo)
+        tableRow += 1
+    if f_rowEnabled(show_relVol, false)
+        f_tableRow(t, tableRow, 'Relative Volume', na(relVol) ? '-' : str.tostring(relVol,'0') + '%', relVolColor, 'Current period volume / mean of prior ' + str.tostring(len) + ' completed period volumes. 150% means 50% above the historical average. Does not adjust for time elapsed.')
+        tableRow += 1
+    if f_rowEnabled(show_rvat, true)
+        f_tableRow(t, tableRow, rvatLabel, tfDaily ? rvatDisplayText : '-', rvatColor, rvatTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_economic_throughput, false)
+        f_tableRow(t, tableRow, 'Economic Throughput [est.]', tfDaily ? f_signedPct(economicThroughput,'0.00') : '-', txt_col, economicThroughputTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_day_range_position, true)
+        f_tableRow(t, tableRow, periodName + ' Range Position', tfDaily ? todayRangeStatus : '-', dayRangeColor, 'Location within current period range: 0% low, 50% midpoint, 100% high. Not an order-flow proxy.')
+        tableRow += 1
+    if f_rowEnabled(show_directional_efficiency, true)
+        f_tableRow(t, tableRow, 'Directional Efficiency', tfDaily ? f_signedPct(directionalEfficiency,'0') : '-', na(directionalEfficiency) ? txt_col : directionalEfficiency >= 0 ? color.green : color.red, efficiencyTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_vwap_distance, true)
+        f_tableRow(t, tableRow, tfHigher ? 'Distance from ' + periodTag + ' VWAP' : 'Distance from VWAP', tfDaily ? f_signedPct(distanceFromVWAP,'0.00') : '-', vwapDistanceColor, vwapDistanceTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_price_impact, false)
+        f_tableRow(t, tableRow, 'Price Response / 1% Float', tfDaily ? f_signedNumber(priceImpactPerTurnover,'0.00',' pp') : '-', priceImpactColor, 'Selected price return (%) / gross float turnover (%). +2% return with 0.5% turnover gives +4.00 pp of price return per 1% turnover. The association is NOT measured market impact, proof of accumulation or a causal attribution. Small turnover can inflate the ratio. Select the price-return basis in Participation / Acceptance.')
+        tableRow += 1
+    if f_rowEnabled(show_UDratio, false)
+        f_tableRow(t, tableRow, 'Up/Down Candle Volume', na(upDnVolRatio) ? '-' : str.tostring(upDnVolRatio,'0.00')+'x', txt_col, '50-period up-close-candle volume divided by down-close-candle volume. NOT aggressor buyer/seller trade volume. Unavailable when denominator is zero.')
+        tableRow += 1
+    if f_rowEnabled(show_rs_rating, false)
+        f_tableRow(t, tableRow, tfHigher ? 'RS vs SPX ('+periodTag+')' : 'RS percentile [est.]', rsValue, txt_col, rsRatingTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_liqCap, false)
+        f_tableRow(t, tableRow, '1% Daily ADV (shares)', f_compactNumber(liquidityCap), txt_col, 'Reference: 1% of prior completed daily shares traded, computed from a daily session even on a higher-timeframe chart. Not a regulatory or exchange liquidity cap.')
+        tableRow += 1
+    if f_rowEnabled(show_days_liquidate, false)
+        f_tableRow(t, tableRow, 'Days to Liquidate [est.]', position_shares <= 0 ? 'Enter position shares' : na(daysToLiquidate) ? 'Awaiting daily ADV' : str.tostring(daysToLiquidate,'0.0') + ' d', txt_col, 'Set Optional portfolio position (shares) and Maximum share of daily ADV (%) under Parameters. Estimate = shares / (daily ADV * participation / 100), in full-session-equivalent trading days. No allowance for market impact, changing volume, weekends, halts or execution constraints. A dash elsewhere means unavailable data; this row identifies its missing input.')
+        tableRow += 1
+    if f_rowEnabled(show_data_quality, false)
+        f_tableRow(t, tableRow, 'Source / Samples', currentDataQuality, txt_col, dataQualityTooltip)
+        tableRow += 1
+    if f_rowEnabled(show_sector, true)
+        f_tableRow(t, tableRow, 'Sector', sector, txt_col, 'TradingView-reported sector label for this symbol.')
+        tableRow += 1
+    if f_rowEnabled(show_ind, true)
+        f_tableRow(t, tableRow, 'Industry Group', industryGrp, txt_col, 'TradingView-reported industry label for this symbol.')
+        tableRow += 1
