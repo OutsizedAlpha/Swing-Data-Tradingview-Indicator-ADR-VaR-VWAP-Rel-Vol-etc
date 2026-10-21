@@ -1,0 +1,23 @@
+# OS and editor artefacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.bak
+*.tmp
+.idea/
+.vscode/
+
+# Local review output
+*.log
+__pycache__/
+.pytest_cache/
+.coverage
+
+# Do not accidentally publish private trade/export data
+*.csv
+*.parquet
+*.sqlite
+*.db
+*.env
+.env.*
