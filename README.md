@@ -1,0 +1,1 @@
+# Swing-Data-Tradingview-Indicator-ADR-VaR-VWAP-Rel-Vol-etc
