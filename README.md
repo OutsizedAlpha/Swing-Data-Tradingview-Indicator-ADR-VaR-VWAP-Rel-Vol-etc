@@ -8,6 +8,12 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 
 > **Research tool, not order flow or investment advice.** Some measures are descriptive proxies, not evidence of institutional buying or selling. Inputs, data coverage, feed conventions, chart timeframe, and available intrabars all affect results. The source has not been independently certified against the native TradingView compiler and live market feeds for every timeframe.
 
+## Example chart — SAP SE
+
+![Example TradingView daily chart of SAP SE featuring the OutsizedAlpha Swing Data metrics table, with additional market charts and indicators](./docs/images/sap-se-swing-data-example.webp)
+
+*SAP SE (NYSE), daily chart captured 21 October 2026. The Swing Data dashboard is shown at the lower left of the SAP price pane. The ADR Extension table, other overlays and additional chart panels are separate indicators. Market readings are illustrative and depend on data feed and settings.*
+
 ## Getting started
 
 1. Open the [complete Pine Script source](./OutsizedAlpha_Swing_Data_Reviewed_v6_3.pine) and copy all of it.
