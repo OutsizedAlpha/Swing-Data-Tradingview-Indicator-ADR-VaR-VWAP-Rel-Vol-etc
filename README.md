@@ -10,6 +10,8 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 
 ## Example chart — SAP SE
 
+<img width="3023" height="1878" alt="image" src="https://github.com/user-attachments/assets/7cf1e4e7-8cd1-45f1-a7cc-b4bcfbb3044f" />
+
 ![Example TradingView daily chart of SAP SE featuring the OutsizedAlpha Swing Data metrics table, with additional market charts and indicators](./docs/images/sap-se-swing-data-example.webp)
 
 *SAP SE (NYSE), daily chart captured 21 October 2026. The Swing Data dashboard is shown at the lower left of the SAP price pane. The ADR Extension table, other overlays and additional chart panels are separate indicators. Market readings are illustrative and depend on data feed and settings.*
