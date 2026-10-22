@@ -1,6 +1,16 @@
 # Changelog
 
-## v6.5 — 22 October 2026 (user-tested current version)
+## v6.6 — 22 October 2026 (user-approved table restyle)
+
+- Restyled the Swing Data table to visually match OutsizedAlpha ADR Extension: **muted cobalt-blue header** (`#3F589D`), **opaque slate-grey body** (`#4E525C`), bold white text, and a thin light-grey outer frame.
+- Added separately configurable positive green (`#3FE28C`), negative red (`#FF686D`) and warning yellow (`#FFD36B`) presentation colours. The existing metric-based colouring **conditions remain unchanged**.
+- Added a blue **OA SWING DATA** header showing chart timeframe and selected table preset.
+- Changed the table text size default to **Small**, disabled the optional top spacer by default, and updated the names of colour inputs to help avoid older saved colour settings overriding the redesigned defaults.
+- Preserved **all 40 optional metric rows**, all nine table anchor positions, and Custom/Compact/Full Research behaviour.
+- **No financial/statistical calculations, data requests, risk or Expected Shortfall formulas, VWAP definitions, or alert rules changed** relative to tested v6.5.
+- User approved the v6.6 design for publication. Publication itself does not constitute independent cross-symbol native Pine validation.
+
+## v6.5 — 22 October 2026 (previous calculation release)
 
 - Added **1% Expected Shortfall** as a separately selectable table row, enabled by default and used in Compact instead of ES5.
 - Preserved selectable **5% Expected Shortfall**, off by default in Custom; both appear in Full Research.
