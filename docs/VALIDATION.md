@@ -1,6 +1,6 @@
 # Validation and release acceptance
 
-**Status:** Imported v6.3 research source. The user reported the v6.2 version running in native TradingView after scope/declaration repairs. The v6.3 change consists predominantly of Custom-default table selection, row-control availability and tooltips. **A native TradingView compile of this exact v6.3 source has not been independently observed here.**
+**Status:** Current repository source is v6.5. The user has reported the latest ADR Extension v6.2 and Swing Data v6.5 **working in TradingView**, including both ES tail rows. This is user-reported chart acceptance, **not** an independently witnessed native compile or cross-feed numerical parity test.
 
 **No claims of automated end-to-end signal validation, feed parity, cross-venue numerical accuracy or investment performance are made.**
 
@@ -8,18 +8,19 @@
 
 These are procedures to run **inside TradingView**, not tests already certified as passing.
 
-- [ ] Paste the complete `OutsizedAlpha_Swing_Data_Reviewed_v6_3.pine` source and **compile**. Capture exact errors if any.
-- [ ] Check 1D US equity with a long history, standard candles, regular session; inspect Market Cap, Float %, Float Turnover, ADR%, ATR%, VaR, VaR 5%, ES 5%, RVOL@Time and VWAP%.
+- [ ] Paste the complete `OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine` source and **compile**. Capture exact errors if any.
+- [ ] Check 1D US equity with a long history, standard candles, regular session; inspect Market Cap, Float %, Float Turnover, ADR%, ATR%, VaR, VaR 5%, ES 1%, ES 5%, RVOL@Time and VWAP%.
 - [ ] Ensure **Table Preset → Custom** makes each corresponding Display tick box change only its own row; no blank gaps.
-- [ ] Check **Compact** yields its fixed 15-row content and greys out row controls. Check **Full Research** yields all 39 rows and disables individual controls.
-- [ ] Confirm all **nine table positions** and five text sizes; note that 39 large-font rows can exceed the chart height.
+- [ ] Check **Compact** yields its fixed 15-row content and greys out row controls. Check **Full Research** yields all 40 rows and disables individual controls.
+- [ ] Confirm all **nine table positions** and five text sizes; note that 40 large-font rows can exceed the chart height.
 - [ ] Change table colours and alignment; confirm no unintended signal changes.
 - [ ] Compare the same symbol's daily table with a 60-minute chart during regular trading. On the 60-minute chart, metrics intended as the **daily mirror** should use daily sessions, not one-hour sessions.
 - [ ] Check 2D, W and M charts: risk sample periods and regular-session VWAP anchors should follow the chart period, not the daily clock.
 - [ ] Compare a stock with missing float data, an ETF and a newly listed security. Unavailable data should show **N/A/—**, not fictitious 0% float or a spurious RS percentile.
 - [ ] Check **Float %** using a trustworthy contemporaneous share-count report and examine any disagreement.
 - [ ] Check the selected historical VaR and 5% VaR against an **independently calculated** sample of prior completed returns; confirm the current candle is not included.
-- [ ] Independently recompute the worst `ceil(0.05 × n)` prior returns to reproduce the displayed ES 5% approximation.
+- [ ] Independently recompute **both** tail means: the worst `ceil(0.01 × n)` completed returns for ES1 and worst `ceil(0.05 × n)` for ES5; confirm neither becomes a dash when VaR has sufficient valid data.
+- [ ] Verify **Compact shows ES1 by default**, **Custom can toggle ES1 and ES5 independently**, and Full Research shows both.
 - [ ] Run RVOL@Time intraday and after the close; inspect historical sample `n`, rejected sessions and whether a full-day value is being compared with a same-time historical value.
 - [ ] Check 15-minute opening suppression and daily projected share/dollar volume against the stated historical completion fractions.
 - [ ] Check Distance from VWAP against the chart's **regular-hours, HLC3, one-minute, session-anchored VWAP**; investigate source-feed discrepancies rather than forcing equality.
