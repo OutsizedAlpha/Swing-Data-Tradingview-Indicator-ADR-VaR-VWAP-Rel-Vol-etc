@@ -1,6 +1,8 @@
 # Methodology and calculation boundaries
 
-This document explains the **v6.5 implementation**, not an independent certification of values from TradingView's realtime feed. The [canonical source](../OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) is authoritative where exact branching and availability rules matter.
+This document explains the **v6.6 implementation**, not an independent certification of values from TradingView's realtime feed. The [canonical source](../OutsizedAlpha_Swing_Data_v6_6_ADR_Styled_Table.pine) is authoritative where exact branching and availability rules matter.
+
+> **Presentation-only v6.6 update:** the optional table now uses a blue header, slate-grey cells, white text and configurable green/red/yellow highlights. These appearance options do **not** change any mathematical metric definition in this document.
 
 ## Data contexts
 
