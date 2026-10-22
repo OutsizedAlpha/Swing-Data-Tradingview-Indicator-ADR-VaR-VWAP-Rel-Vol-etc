@@ -1,6 +1,6 @@
 # Methodology and calculation boundaries
 
-This document explains the **v6.3 implementation**, not an independent certification of values from TradingView's realtime feed. The [canonical source](../OutsizedAlpha_Swing_Data_Reviewed_v6_3.pine) is authoritative where exact branching and availability rules matter.
+This document explains the **v6.5 implementation**, not an independent certification of values from TradingView's realtime feed. The [canonical source](../OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) is authoritative where exact branching and availability rules matter.
 
 ## Data contexts
 
@@ -68,7 +68,10 @@ The main risk rows use **completed returns before the current period**:
 
 - **Selected VaR:** interpolated empirical quantile at the selected lower-tail percentage, default **1%**.
 - **5% Historical VaR:** separately estimated fifth-percentile return cutoff on the same completed-return sample.
-- **Expected Shortfall 5%:** average of the worst `ceil(0.05 × n)` observed returns. This is an approximation rather than a fractionally weighted formal conditional tail estimator.
+- **Expected Shortfall 1% (default):** arithmetic mean of the worst `ceil(0.01 × n)` completed returns. With 252 valid returns the worst **three** are averaged; with 126, the worst **two**. **Not a median**, and not a calibrated maximum loss.
+- **Expected Shortfall 5% (optional):** mean of the worst `ceil(0.05 × n)` completed returns, e.g. the worst **13** when `n=252`.
+- **Pine history-buffer consideration:** both ES helpers must run on every bar for their historical parameter buffers to be correctly populated; the tail sorting is performed only when needed. The daily-mirror and higher-timeframe engines provide these same two ES definitions independently.
+- **Approximation:** both discrete tail means use `ceil(alpha × n)`; they are not fractionally weighted estimators of a continuous loss distribution.
 - **Legacy VaR − 3σ:** custom severity heuristic; no assigned confidence level, not conventional historical ES.
 
 Default maximum is **252 returns**, minimum **126 completed daily returns**. Higher chart periods use separately selected minimums. Actual sample length can be smaller than requested due to data availability. At `n=252`, there are only around 2.52 expected observations within a 1% population tail: the estimate is statistically fragile.
