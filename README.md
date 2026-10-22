@@ -4,7 +4,7 @@
 
 This public repository contains the OutsizedAlpha-expanded derivative of **[jfsrev's original, open-source Swing Data indicator](https://www.tradingview.com/script/uloAa2EI-Swing-Data-ADR-RVol-PVol-Float-Avg-Vol/)**. The upstream author deserves primary credit for the initial dashboard concept and code. OutsizedAlpha's subsequent version includes redesigned risk and volume calculations, several new diagnostics, and a compact/custom/full table system.
 
-[**Download Pine source**](./OutsizedAlpha_Swing_Data_Reviewed_v6_3.pine) · [**Methodology**](./docs/METHODOLOGY.md) · [**Validation checklist**](./docs/VALIDATION.md) · [**Contributors and attribution**](./ATTRIBUTION.md) · [**Changelog**](./CHANGELOG.md) · [**MPL-2.0 licence**](./LICENSE)
+[**Download Pine source**](./OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) · [**Methodology**](./docs/METHODOLOGY.md) · [**Validation checklist**](./docs/VALIDATION.md) · [**Contributors and attribution**](./ATTRIBUTION.md) · [**Changelog**](./CHANGELOG.md) · [**MPL-2.0 licence**](./LICENSE)
 
 > **Research tool, not order flow or investment advice.** Some measures are descriptive proxies, not evidence of institutional buying or selling. Inputs, data coverage, feed conventions, chart timeframe, and available intrabars all affect results. The source has not been independently certified against the native TradingView compiler and live market feeds for every timeframe.
 
@@ -16,14 +16,14 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 
 ## Getting started
 
-1. Open the [complete Pine Script source](./OutsizedAlpha_Swing_Data_Reviewed_v6_3.pine) and copy all of it.
+1. Open the [complete Pine Script source](./OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) and copy all of it.
 2. In [TradingView](https://www.tradingview.com/), open a chart and select **Pine Editor → Create new indicator**.
 3. Replace the editor contents, save, and select **Add to chart**.
 4. Use **Settings → Inputs → Table Preset → Custom** (the default). Under **Display**, tick precisely the metrics you want.
 5. Select your **Table Position** from all nine chart anchors, and **Table Size** from Tiny, Small, Normal, Large or Extra Large.
 6. Check the metric tooltips for actual sample sizes, data-source assumptions and eligibility; a dash means a reading is unavailable, not necessarily zero.
 
-**Version in this repository:** v6.3 (source build `OUTSIZEDALPHA-SWING-DATA-v3.3`). It contains **39 configurable metrics**. The original chart overlay has no trade execution or position management.
+**Version in this repository:** v6.5 (source build `OUTSIZEDALPHA-SWING-DATA-v3.5`). It contains **40 selectable table metrics**. The original chart overlay has no trade execution or position management.
 
 ## Table behaviour — important
 
@@ -31,9 +31,9 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 | --- | --- | --- |
 | **Custom (default)** | Exactly the rows you enable | **Active** |
 | **Compact** | Fixed 15-row overview modelled on the original dashboard | Disabled while selected |
-| **Full Research** | All 39 metric rows | Disabled while selected |
+| **Full Research** | All 40 metric rows | Disabled while selected |
 
-**To show a newly enabled metric, select Custom.** A previously saved TradingView chart instance may retain Compact from an older version, even though v6.3 defaults to Custom. Full Research may exceed the available chart height; choose Small/Tiny text or a selective Custom layout.
+**To show a newly enabled metric, select Custom.** A previously saved TradingView chart instance may retain Compact from an older version, even though v6.5 defaults to Custom. Full Research may exceed the available chart height; choose Small/Tiny text or a selective Custom layout.
 
 Available anchor positions: **Top Left / Top Centre / Top Right; Middle Left / Middle Centre / Middle Right; Bottom Left / Bottom Centre / Bottom Right.** These are Pine table anchors, not freely draggable table coordinates.
 
@@ -106,7 +106,13 @@ This reading alone does not quantify how long price remained above or below VWAP
 
 ## Risk estimates
 
-**VaR 1%** (when the selected lower-tail percentile is at its default) is a historical 1st-percentile signed return quantile. **VaR 5%** is a separate 5th-percentile quantile. **Expected Shortfall 5%** averages the worst `ceil(0.05 × n)` previously completed returns. The selectable legacy **VaR − 3σ** is a custom severity heuristic, **not** a separately calibrated VaR confidence level or Expected Shortfall.
+**VaR 1%** (with the selected lower-tail percentile at its default) is the empirical 1st-percentile signed return quantile. **VaR 5%** is the separate 5th-percentile cutoff.
+
+**Expected Shortfall 1%** (**on by default, including Compact**) is the **arithmetic mean, not the median**, of the worst `ceil(0.01 × n)` previously completed returns from the same sample. At **252 returns** it averages the worst **three**. **Expected Shortfall 5%** (**optional, enabled separately in Custom**) averages the worst `ceil(0.05 × n)`; at 252 observations it uses the worst **13**. Both return negative percentages for negative tail returns and describe historical severity, not a maximum possible loss.
+
+ES1 and ES5 are calculated across the **1D, below-1D daily-mirror, and native higher-timeframe** paths. Version 6.4 corrected a Pine history-buffer issue so that the ES helper is evaluated on every bar; v6.5 preserves that repair and adds ES1. The method uses discrete `ceil(alpha × n)` tail counts and is an approximation to fractionally weighted Expected Shortfall. Especially at 1%, the sample is sparse and the estimate is volatile.
+
+The selectable legacy **VaR − 3σ** remains a custom severity heuristic, **not** a separately calibrated VaR confidence level or Expected Shortfall.
 
 These figures are empirical descriptions, not price targets, guaranteed worst losses or validated forward-risk forecasts. A missing or incomplete history can display `-`.
 
