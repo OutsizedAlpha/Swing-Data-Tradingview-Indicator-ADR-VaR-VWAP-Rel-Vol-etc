@@ -1,6 +1,6 @@
 # Validation and release acceptance
 
-**Status:** Current repository source is v6.5. The user has reported the latest ADR Extension v6.2 and Swing Data v6.5 **working in TradingView**, including both ES tail rows. This is user-reported chart acceptance, **not** an independently witnessed native compile or cross-feed numerical parity test.
+**Status:** Current repository source is v6.6. The user reported Swing Data v6.5 working in TradingView (including ES1 and ES5) and approved the v6.6 visual-table changes. That is user-reported acceptance, **not** an independently witnessed native compile or exhaustive cross-feed accuracy test.
 
 **No claims of automated end-to-end signal validation, feed parity, cross-venue numerical accuracy or investment performance are made.**
 
@@ -8,11 +8,14 @@
 
 These are procedures to run **inside TradingView**, not tests already certified as passing.
 
-- [ ] Paste the complete `OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine` source and **compile**. Capture exact errors if any.
+- [ ] Paste the complete `OutsizedAlpha_Swing_Data_v6_6_ADR_Styled_Table.pine` source and **compile**. Capture exact errors if any.
 - [ ] Check 1D US equity with a long history, standard candles, regular session; inspect Market Cap, Float %, Float Turnover, ADR%, ATR%, VaR, VaR 5%, ES 1%, ES 5%, RVOL@Time and VWAP%.
 - [ ] Ensure **Table Preset → Custom** makes each corresponding Display tick box change only its own row; no blank gaps.
 - [ ] Check **Compact** yields its fixed 15-row content and greys out row controls. Check **Full Research** yields all 40 rows and disables individual controls.
-- [ ] Confirm all **nine table positions** and five text sizes; note that 40 large-font rows can exceed the chart height.
+- [ ] Confirm the blue **OA SWING DATA** header, slate-grey cells, thin border, bold white normal text, and existing green/red/yellow conditional readings appear as expected.
+- [ ] Confirm all **nine table positions** and five text sizes; the new default is **Small**, and 40 large-font rows can exceed the chart height.
+- [ ] Change **Header Background Colour, Body Background Colour, Body Text Colour, Positive/Negative/Warning Highlight Colour, Outer Border Colour** and confirm these are display-only.
+- [ ] Confirm **Top Spacer Above Table** is off by default and enabling it adds space above the blue header.
 - [ ] Change table colours and alignment; confirm no unintended signal changes.
 - [ ] Compare the same symbol's daily table with a 60-minute chart during regular trading. On the 60-minute chart, metrics intended as the **daily mirror** should use daily sessions, not one-hour sessions.
 - [ ] Check 2D, W and M charts: risk sample periods and regular-session VWAP anchors should follow the chart period, not the daily clock.
