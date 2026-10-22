@@ -19,9 +19,9 @@ Never upload private account credentials, position holdings or confidential mark
 2. Make clear whether the change affects **calculations, source handling, sample-quality criteria, signals, presets or presentation**.
 3. Update [docs/METHODOLOGY.md](./docs/METHODOLOGY.md) and [CHANGELOG.md](./CHANGELOG.md) for material changes.
 4. Maintain the **percentage-only VWAP distance** unless a future owner explicitly requests a different definition.
-5. Avoid look-ahead: downside-risk reference samples must consist of **prior completed returns**.
+5. Avoid look-ahead: downside-risk reference samples must consist of **prior completed returns**. For both **ES1 and ES5**, keep per-bar invocation of the helper so Pine's parameter history is populated, and verify the lowest `ceil(alpha × n)` values are averaged.
 6. Do not turn missing historical float into made-up values or silently relabel volume ranks as historical-float ranks.
-7. In Custom mode, each of the **39 Display toggles** should control its own metric row. Compact/Full Research deliberately override and disable those toggles.
+7. In Custom mode, each of the **40 Display toggles** should control its own metric row. Compact/Full Research deliberately override and disable those toggles.
 8. Test function-scope variable declarations and dynamic-request contexts, including the daily-mirror engine. A single invalid returned object can cascade into dozens of `iEngine` errors.
 9. Follow [docs/VALIDATION.md](./docs/VALIDATION.md) in TradingView; distinguish native compile results from Python or static source inspections.
 10. Do not claim improved predictive performance without a clearly reproducible out-of-sample evaluation.
