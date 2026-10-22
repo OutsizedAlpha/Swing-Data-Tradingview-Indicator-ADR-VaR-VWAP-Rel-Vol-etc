@@ -1,5 +1,20 @@
 # Changelog
 
+## v6.5 — 22 October 2026 (user-tested current version)
+
+- Added **1% Expected Shortfall** as a separately selectable table row, enabled by default and used in Compact instead of ES5.
+- Preserved selectable **5% Expected Shortfall**, off by default in Custom; both appear in Full Research.
+- Calculated ES1 and ES5 from **preceding completed returns** with the same sample conventions as their related historical VaR metrics.
+- Daily, intraday daily-mirror and 2D+/weekly/monthly calculations now support both ES measures.
+- With 252 returns, ES1 averages the worst **3** observations; ES5 the worst **13**. The discrete `ceil(alpha × n)` implementation is an empirical tail approximation.
+- Total selectable table metrics increased from **39 to 40**.
+- User confirmed both the 1% and 5% Expected Shortfall measurements work in TradingView. This does not independently certify numerical parity across all feeds and timeframes.
+
+## v6.4 — 22 October 2026
+
+- Repaired a Pine history-buffer issue: the Expected Shortfall helper is now called **on every bar**, so its parameter history is available when a completed-return tail calculation is requested.
+- Preserved the existing risk and VWAP percentage conventions without introducing new price normalisers.
+
 ## v6.3 — initial public repository snapshot (21 October 2026)
 
 - Imported the full OutsizedAlpha Swing Data Pine Script v6.3 source with **comment-only MPL-2.0 and upstream attribution header**.
