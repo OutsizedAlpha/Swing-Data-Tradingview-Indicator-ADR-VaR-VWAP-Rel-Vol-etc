@@ -4,7 +4,7 @@
 
 This public repository contains the OutsizedAlpha-expanded derivative of **[jfsrev's original, open-source Swing Data indicator](https://www.tradingview.com/script/uloAa2EI-Swing-Data-ADR-RVol-PVol-Float-Avg-Vol/)**. The upstream author deserves primary credit for the initial dashboard concept and code. OutsizedAlpha's subsequent version includes redesigned risk and volume calculations, several new diagnostics, and a compact/custom/full table system.
 
-[**Download Pine source**](./OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) · [**Methodology**](./docs/METHODOLOGY.md) · [**Validation checklist**](./docs/VALIDATION.md) · [**Contributors and attribution**](./ATTRIBUTION.md) · [**Changelog**](./CHANGELOG.md) · [**MPL-2.0 licence**](./LICENSE)
+[**Download Pine source**](./OutsizedAlpha_Swing_Data_v6_6_ADR_Styled_Table.pine) · [**Methodology**](./docs/METHODOLOGY.md) · [**Validation checklist**](./docs/VALIDATION.md) · [**Contributors and attribution**](./ATTRIBUTION.md) · [**Changelog**](./CHANGELOG.md) · [**MPL-2.0 licence**](./LICENSE)
 
 > **Research tool, not order flow or investment advice.** Some measures are descriptive proxies, not evidence of institutional buying or selling. Inputs, data coverage, feed conventions, chart timeframe, and available intrabars all affect results. The source has not been independently certified against the native TradingView compiler and live market feeds for every timeframe.
 
@@ -16,14 +16,14 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 
 ## Getting started
 
-1. Open the [complete Pine Script source](./OutsizedAlpha_Swing_Data_Reviewed_v6_5_ES1_and_ES5.pine) and copy all of it.
+1. Open the [complete Pine Script source](./OutsizedAlpha_Swing_Data_v6_6_ADR_Styled_Table.pine) and copy all of it.
 2. In [TradingView](https://www.tradingview.com/), open a chart and select **Pine Editor → Create new indicator**.
 3. Replace the editor contents, save, and select **Add to chart**.
 4. Use **Settings → Inputs → Table Preset → Custom** (the default). Under **Display**, tick precisely the metrics you want.
-5. Select your **Table Position** from all nine chart anchors, and **Table Size** from Tiny, Small, Normal, Large or Extra Large.
+5. Select your **Table Position** from all nine chart anchors, and **Table Text Size** from Tiny, Small, Normal, Large or Extra Large.
 6. Check the metric tooltips for actual sample sizes, data-source assumptions and eligibility; a dash means a reading is unavailable, not necessarily zero.
 
-**Version in this repository:** v6.5 (source build `OUTSIZEDALPHA-SWING-DATA-v3.5`). It contains **40 selectable table metrics**. The original chart overlay has no trade execution or position management.
+**Version in this repository:** v6.6 (source build `OUTSIZEDALPHA-SWING-DATA-v3.6`). It contains **40 selectable table metrics**. The original chart overlay has no trade execution or position management.
 
 ## Table behaviour — important
 
@@ -33,11 +33,29 @@ This public repository contains the OutsizedAlpha-expanded derivative of **[jfsr
 | **Compact** | Fixed 15-row overview modelled on the original dashboard | Disabled while selected |
 | **Full Research** | All 40 metric rows | Disabled while selected |
 
-**To show a newly enabled metric, select Custom.** A previously saved TradingView chart instance may retain Compact from an older version, even though v6.5 defaults to Custom. Full Research may exceed the available chart height; choose Small/Tiny text or a selective Custom layout.
+**To show a newly enabled metric, select Custom.** A previously saved TradingView chart instance may retain Compact from an older version, even though v6.6 defaults to Custom. Full Research may exceed the available chart height; choose Small/Tiny text or a selective Custom layout.
 
 Available anchor positions: **Top Left / Top Centre / Top Right; Middle Left / Middle Centre / Middle Right; Bottom Left / Bottom Centre / Bottom Right.** These are Pine table anchors, not freely draggable table coordinates.
 
 The panel also supports left/right text alignment, background and text colours, and an optional empty row at the top to avoid the TradingView pane buttons. The current implementation uses a two-column metric/value table.
+
+## ADR Extension-inspired table styling (v6.6)
+
+The Swing Data table now matches the visual language of the [OutsizedAlpha ADR / MA Extension](https://github.com/OutsizedAlpha/dynamic-standard-deviation-based-multiple-extension-from-moving-average-Tradingview-Indicator). The **calculation engine and the 40 metric switches are unchanged**.
+
+| Element | Default | Effect |
+| --- | --- | --- |
+| **Blue header** | `#3F589D` | White **OA SWING DATA** title on the left; selected chart timeframe and table preset on the right |
+| **Slate-grey body** | `#4E525C` | Opaque background for every metric and value cell, rather than the old transparent fill |
+| **Default text** | `#FFFFFF` | Bold white rows for standard metrics |
+| **Positive highlight** | `#3FE28C` | Green when the existing metric conditions flag a positive/high reading |
+| **Negative highlight** | `#FF686D` | Red when the existing metric conditions flag a negative/low or invalid reading |
+| **Warning highlight** | `#FFD36B` | Yellow when the existing conditional warning is triggered |
+| **Outer border** | `#D0D1D5` | Thin light-grey frame |
+
+The colour palette can be customised under **Settings → Inputs → Table**. These are **presentation colours only**; they do not change the thresholds governing RVOL, VWAP, directional efficiency, VaR/ES or float reporting.
+
+**Table Text Size now defaults to Small**, keeping the 40-row dashboard usable; Tiny, Normal, Large and Extra Large remain available. **Top Spacer Above Table defaults to Off** so the blue header sits flush at the chosen table anchor. Enable it only when chart controls overlap the header. Existing TradingView chart instances may retain previously saved settings: review the **Table** inputs after replacing the script.
 
 ## What the indicator measures
 
